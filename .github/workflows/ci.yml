@@ -1,0 +1,36 @@
+name: Testing Moonspot\ValueObjects
+
+on: [push]
+
+jobs:
+  test:
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        php-versions: ['8.4', '8.3', '8.2']
+        include:
+          - operating-system: 'ubuntu-latest'
+            php-versions: '8.2'
+            phpunit-versions: 11
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Composer Install
+      uses: php-actions/composer@v6
+      with:
+        php_extensions: "yaml"
+        php_version: ${{ matrix.php-versions }}
+
+    - name: PHPUnit tests
+      uses: php-actions/phpunit@v4
+      with:
+        php_extensions: "pcov yaml"
+        version: "11.5"
+        php_version: ${{ matrix.php-versions }}
+
+    - name: Run Phan
+      uses: k1LoW/phan-action@v0
