@@ -11,6 +11,5 @@ namespace Moonspot\PhlagClient\Exception;
  *
  * @package Moonspot\PhlagClient\Exception
  */
-class NetworkException extends PhlagException
-{
+class NetworkException extends PhlagException {
 }

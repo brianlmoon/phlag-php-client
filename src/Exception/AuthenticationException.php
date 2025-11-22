@@ -11,6 +11,5 @@ namespace Moonspot\PhlagClient\Exception;
  *
  * @package Moonspot\PhlagClient\Exception
  */
-class AuthenticationException extends PhlagException
-{
+class AuthenticationException extends PhlagException {
 }

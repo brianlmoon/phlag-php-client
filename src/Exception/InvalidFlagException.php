@@ -11,6 +11,5 @@ namespace Moonspot\PhlagClient\Exception;
  *
  * @package Moonspot\PhlagClient\Exception
  */
-class InvalidFlagException extends PhlagException
-{
+class InvalidFlagException extends PhlagException {
 }

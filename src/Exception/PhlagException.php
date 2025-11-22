@@ -13,6 +13,5 @@ use Exception;
  *
  * @package Moonspot\PhlagClient\Exception
  */
-class PhlagException extends Exception
-{
+class PhlagException extends Exception {
 }

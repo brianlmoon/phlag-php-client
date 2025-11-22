@@ -21,8 +21,7 @@ use Moonspot\PhlagClient\Exception\PhlagException;
  *
  * @package Moonspot\PhlagClient
  */
-class Client
-{
+class Client {
     /**
      * @var GuzzleClient The underlying Guzzle HTTP client
      */
@@ -49,8 +48,7 @@ class Client
      * @param string $base_url The base URL of the Phlag server (e.g., http://localhost:8000)
      * @param string $api_key  The 64-character API key for authentication
      */
-    public function __construct(string $base_url, string $api_key)
-    {
+    public function __construct(string $base_url, string $api_key) {
         $this->base_url = rtrim($base_url, '/');
         $this->api_key  = $api_key;
 
@@ -86,8 +84,7 @@ class Client
      * @throws NetworkException             When network communication fails
      * @throws PhlagException               For other HTTP errors
      */
-    public function get(string $endpoint): mixed
-    {
+    public function get(string $endpoint): mixed {
         $return = null;
 
         try {

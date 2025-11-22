@@ -48,6 +48,14 @@ if ($client->isEnabled('feature_checkout')) {
 $max_items = $client->getFlag('max_items'); // returns int or null
 $price_multiplier = $client->getFlag('price_multiplier'); // returns float or null
 $welcome_message = $client->getFlag('welcome_message'); // returns string or null
+
+// For high-traffic apps, enable caching
+$cached_client = new PhlagClient(
+    base_url: 'http://localhost:8000',
+    api_key: 'your-api-key',
+    environment: 'production',
+    cache: true  // Fetches all flags once, caches for 5 minutes
+);
 ```
 
 ## Usage
@@ -141,6 +149,118 @@ $prod_enabled = $prod_client->isEnabled('feature_beta');
 $staging_enabled = $staging_client->isEnabled('feature_beta');
 ```
 
+## Performance & Caching
+
+For high-traffic applications, enable file-based caching to dramatically reduce API calls:
+
+```php
+$client = new PhlagClient(
+    base_url: 'http://localhost:8000',
+    api_key: 'your-api-key',
+    environment: 'production',
+    cache: true,           // Enable caching
+    cache_file: null,      // Auto-generate filename (optional)
+    cache_ttl: 300         // Cache for 5 minutes (optional)
+);
+
+// First call fetches all flags from API (1 request)
+$enabled = $client->isEnabled('feature_checkout');
+
+// Subsequent calls use cached data (0 requests)
+$max = $client->getFlag('max_items');
+$price = $client->getFlag('price_multiplier');
+```
+
+### How Caching Works
+
+When caching is enabled:
+1. **First request**: Client fetches ALL flags for the environment via `/all-flags` endpoint
+2. **Cache storage**: Flags stored in memory AND persisted to disk
+3. **Subsequent requests**: Served from in-memory cache (no API calls)
+4. **Cache expiration**: After TTL expires, next request refreshes from API
+5. **Cross-request persistence**: Cache file survives between PHP requests
+
+### Cache File Location
+
+By default, cache files are stored in the system temp directory with auto-generated names:
+
+```php
+// Auto-generated filename format
+sys_get_temp_dir() . '/phlag_cache_{hash}.json'
+
+// Hash is MD5 of base_url + environment
+// Example: /tmp/phlag_cache_a1b2c3d4e5f6.json
+```
+
+**Custom cache file:**
+
+```php
+$client = new PhlagClient(
+    base_url: 'http://localhost:8000',
+    api_key: 'your-api-key',
+    environment: 'production',
+    cache: true,
+    cache_file: '/var/cache/app/phlag_prod.json'
+);
+```
+
+### Cache Management
+
+**Warming the cache** (preload before first request):
+
+```php
+$client->warmCache();  // Immediately fetches and caches all flags
+```
+
+**Clearing the cache** (force fresh fetch):
+
+```php
+$client->clearCache();  // Removes cache file and in-memory data
+
+// Next request will fetch fresh from API
+$value = $client->getFlag('feature');
+```
+
+**Checking cache status:**
+
+```php
+if ($client->isCacheEnabled()) {
+    echo "Cache file: " . $client->getCacheFile() . "\n";
+    echo "TTL: " . $client->getCacheTtl() . " seconds\n";
+}
+```
+
+### When to Use Caching
+
+**✅ Good use cases:**
+- High-traffic applications with frequent flag checks
+- Flags that change infrequently (hourly, daily)
+- Reducing API load and network latency
+- Improving response times (sub-millisecond flag checks)
+
+**❌ When to avoid caching:**
+- You need real-time flag updates (seconds matter)
+- Flags change very frequently
+- Low-traffic applications (caching overhead not worth it)
+- Single flag check per request
+
+### Performance Impact
+
+**Without caching:**
+- API calls: N (one per `getFlag()` call)
+- Network overhead: ~10-50ms per call
+- Total overhead: N × 10-50ms
+
+**With caching:**
+- API calls: 1 per TTL period (default 5 minutes)
+- First request: ~10-50ms (fetch all flags)
+- Subsequent requests: <1ms (memory lookup)
+- Cache file I/O: ~1-2ms on first load per PHP request
+
+**Example savings** (100 flag checks per request, 1000 requests/minute):
+- Without cache: 100,000 API calls/minute
+- With cache (300s TTL): ~20 API calls/minute (99.98% reduction)
+
 ## Error Handling
 
 The client throws specific exceptions for different error conditions:
@@ -188,7 +308,7 @@ try {
 
 ### PhlagClient
 
-#### `__construct(string $base_url, string $api_key, string $environment)`
+#### `__construct(string $base_url, string $api_key, string $environment, bool $cache = false, ?string $cache_file = null, int $cache_ttl = 300)`
 
 Creates a new client instance.
 
@@ -196,10 +316,13 @@ Creates a new client instance.
 - `$base_url` - Base URL of your Phlag server (e.g., `http://localhost:8000`)
 - `$api_key` - 64-character API key from the Phlag admin panel
 - `$environment` - Environment name (e.g., `production`, `staging`, `development`)
+- `$cache` - Enable file-based caching (default: `false`)
+- `$cache_file` - Custom cache file path (default: auto-generated in system temp directory)
+- `$cache_ttl` - Cache time-to-live in seconds (default: `300`)
 
 #### `getFlag(string $name): mixed`
 
-Retrieves a flag value.
+Retrieves a flag value. When caching is enabled, serves from cache after first request.
 
 **Parameters:**
 - `$name` - Flag name
@@ -208,7 +331,7 @@ Retrieves a flag value.
 
 **Throws:**
 - `AuthenticationException` - Invalid API key
-- `InvalidFlagException` - Flag doesn't exist
+- `InvalidFlagException` - Flag doesn't exist (cache disabled only)
 - `InvalidEnvironmentException` - Environment doesn't exist
 - `NetworkException` - Network communication failed
 - `PhlagException` - Other errors
@@ -232,12 +355,44 @@ Gets the current environment name.
 
 #### `withEnvironment(string $environment): self`
 
-Creates a new client for a different environment.
+Creates a new client for a different environment. Cache settings are preserved but a new cache file is generated.
 
 **Parameters:**
 - `$environment` - New environment name
 
 **Returns:** New PhlagClient instance (immutable pattern)
+
+#### `warmCache(): void`
+
+Preloads the flag cache immediately. Useful for warming cache during application startup.
+
+**Heads-up:** No-op if caching is disabled.
+
+**Throws:** Same as `getFlag()` for API errors
+
+#### `clearCache(): void`
+
+Clears in-memory and file cache, forcing fresh fetch on next request.
+
+**Heads-up:** No-op if caching is disabled.
+
+#### `isCacheEnabled(): bool`
+
+Checks if caching is enabled.
+
+**Returns:** `true` if caching is enabled
+
+#### `getCacheFile(): string`
+
+Gets the cache file path (even if file doesn't exist yet).
+
+**Returns:** Absolute path to the cache file
+
+#### `getCacheTtl(): int`
+
+Gets the cache time-to-live in seconds.
+
+**Returns:** Cache TTL in seconds
 
 ## Development
 
@@ -290,6 +445,34 @@ $client = new PhlagClient('https://labs.moonspot.net', 'key', 'prod');
 // Correct - includes /phlag subdirectory
 $client = new PhlagClient('https://labs.moonspot.net/phlag', 'key', 'prod');
 ```
+
+### Stale Cache Data
+
+If you're seeing outdated flag values when caching is enabled:
+
+**Problem:** Cache hasn't expired yet  
+**Solutions:**
+1. Use shorter TTL: `new PhlagClient($url, $key, $env, cache: true, cache_ttl: 60)`
+2. Manually clear: `$client->clearCache()`
+3. Disable caching if you need real-time updates
+
+### Cache File Permission Errors
+
+If cache files aren't being created:
+
+**Problem:** No write permission to temp directory or custom cache path  
+**Solution:** Ensure PHP has write access to `sys_get_temp_dir()` or your custom cache directory
+
+```php
+// Check permissions
+$cache_file = $client->getCacheFile();
+$cache_dir = dirname($cache_file);
+if (!is_writable($cache_dir)) {
+    echo "No write permission to: $cache_dir\n";
+}
+```
+
+Heads-up: Cache write failures are logged but don't throw exceptions. The client gracefully degrades to non-cached operation.
 
 ### Connection Timeouts
 

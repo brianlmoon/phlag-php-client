@@ -20,8 +20,7 @@ use ReflectionClass;
  *
  * @package Moonspot\PhlagClient\Tests
  */
-class PhlagClientTest extends TestCase
-{
+class PhlagClientTest extends TestCase {
     /**
      * Creates a PhlagClient with a mocked HTTP client
      *
@@ -67,8 +66,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests getting a SWITCH flag that returns true
      */
-    public function testGetFlagSwitchTrue(): void
-    {
+    public function testGetFlagSwitchTrue(): void {
         $mock = new MockHandler([
             new Response(200, [], 'true'),
         ]);
@@ -82,8 +80,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests getting a SWITCH flag that returns false
      */
-    public function testGetFlagSwitchFalse(): void
-    {
+    public function testGetFlagSwitchFalse(): void {
         $mock = new MockHandler([
             new Response(200, [], 'false'),
         ]);
@@ -97,8 +94,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests getting an INTEGER flag
      */
-    public function testGetFlagInteger(): void
-    {
+    public function testGetFlagInteger(): void {
         $mock = new MockHandler([
             new Response(200, [], '100'),
         ]);
@@ -112,8 +108,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests getting a FLOAT flag
      */
-    public function testGetFlagFloat(): void
-    {
+    public function testGetFlagFloat(): void {
         $mock = new MockHandler([
             new Response(200, [], '3.14'),
         ]);
@@ -127,8 +122,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests getting a STRING flag
      */
-    public function testGetFlagString(): void
-    {
+    public function testGetFlagString(): void {
         $mock = new MockHandler([
             new Response(200, [], '"hello world"'),
         ]);
@@ -142,8 +136,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests getting a null flag (nonexistent or inactive)
      */
-    public function testGetFlagNull(): void
-    {
+    public function testGetFlagNull(): void {
         $mock = new MockHandler([
             new Response(200, [], 'null'),
         ]);
@@ -157,8 +150,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests isEnabled returns true for enabled flags
      */
-    public function testIsEnabledTrue(): void
-    {
+    public function testIsEnabledTrue(): void {
         $mock = new MockHandler([
             new Response(200, [], 'true'),
         ]);
@@ -172,8 +164,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests isEnabled returns false for disabled flags
      */
-    public function testIsEnabledFalse(): void
-    {
+    public function testIsEnabledFalse(): void {
         $mock = new MockHandler([
             new Response(200, [], 'false'),
         ]);
@@ -187,8 +178,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests isEnabled returns false for null values
      */
-    public function testIsEnabledNull(): void
-    {
+    public function testIsEnabledNull(): void {
         $mock = new MockHandler([
             new Response(200, [], 'null'),
         ]);
@@ -205,8 +195,7 @@ class PhlagClientTest extends TestCase
      * Heads-up: This is intentional behavior - isEnabled should only return
      * true for actual boolean true values.
      */
-    public function testIsEnabledNonBoolean(): void
-    {
+    public function testIsEnabledNonBoolean(): void {
         $mock = new MockHandler([
             new Response(200, [], '100'),
         ]);
@@ -220,8 +209,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests getEnvironment returns the correct environment
      */
-    public function testGetEnvironment(): void
-    {
+    public function testGetEnvironment(): void {
         $mock = new MockHandler([]);
 
         $client = $this->createClientWithMock($mock, 'staging');
@@ -233,8 +221,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests withEnvironment creates a new instance
      */
-    public function testWithEnvironmentCreatesNewInstance(): void
-    {
+    public function testWithEnvironmentCreatesNewInstance(): void {
         $mock = new MockHandler([]);
 
         $client1 = $this->createClientWithMock($mock, 'production');
@@ -248,8 +235,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests that different environments query different endpoints
      */
-    public function testDifferentEnvironmentsQueryDifferentEndpoints(): void
-    {
+    public function testDifferentEnvironmentsQueryDifferentEndpoints(): void {
         $mock1 = new MockHandler([
             new Response(200, [], 'true'),
         ]);
@@ -271,8 +257,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests that constructor stores all required properties
      */
-    public function testConstructorStoresProperties(): void
-    {
+    public function testConstructorStoresProperties(): void {
         $client = new PhlagClient(
             'http://example.com',
             'my-api-key',
@@ -300,8 +285,7 @@ class PhlagClientTest extends TestCase
      * test verifies that relative endpoint paths work correctly with Guzzle's
      * base_uri resolution.
      */
-    public function testSubdirectoryBaseUrl(): void
-    {
+    public function testSubdirectoryBaseUrl(): void {
         $container = [];
         $history   = \GuzzleHttp\Middleware::history($container);
 
@@ -353,8 +337,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests subdirectory with trailing slash is handled correctly
      */
-    public function testSubdirectoryWithTrailingSlash(): void
-    {
+    public function testSubdirectoryWithTrailingSlash(): void {
         $container = [];
         $history   = \GuzzleHttp\Middleware::history($container);
 
@@ -408,8 +391,7 @@ class PhlagClientTest extends TestCase
     /**
      * Tests deep subdirectory path support
      */
-    public function testDeepSubdirectoryPath(): void
-    {
+    public function testDeepSubdirectoryPath(): void {
         $container = [];
         $history   = \GuzzleHttp\Middleware::history($container);
 
