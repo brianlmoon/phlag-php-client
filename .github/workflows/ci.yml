@@ -1,4 +1,4 @@
-name: Testing Moonspot\ValueObjects
+name: Testing Moonspot\PhlagClient
 
 on: [push]
 
