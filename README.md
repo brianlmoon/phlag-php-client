@@ -64,6 +64,23 @@ $client = new PhlagClient(
 );
 ```
 
+#### Subdirectory Installation
+
+If your Phlag server is installed in a subdirectory, include the full path in the base URL:
+
+```php
+$client = new PhlagClient(
+    base_url: 'https://labs.moonspot.net/phlag',  // Note: includes /phlag subdirectory
+    api_key: 'your-api-key',
+    environment: 'production'
+);
+
+// Client will correctly request:
+// https://labs.moonspot.net/phlag/flag/production/feature_name
+```
+
+The client automatically handles trailing slashes, so both `https://labs.moonspot.net/phlag` and `https://labs.moonspot.net/phlag/` work correctly.
+
 ### Checking Feature Flags
 
 The `isEnabled()` method is perfect for boolean feature toggles:
@@ -256,6 +273,31 @@ phlag-client/
 │   └── PhlagClientTest.php     # PhlagClient tests
 └── composer.json
 ```
+
+## Troubleshooting
+
+### 404 Errors with Subdirectory Installation
+
+If you're getting 404 errors and your Phlag server is installed in a subdirectory:
+
+**Problem:** Base URL doesn't include the subdirectory path  
+**Solution:** Make sure your base URL includes the full path to Phlag
+
+```php
+// Wrong - missing subdirectory
+$client = new PhlagClient('https://labs.moonspot.net', 'key', 'prod');
+
+// Correct - includes /phlag subdirectory
+$client = new PhlagClient('https://labs.moonspot.net/phlag', 'key', 'prod');
+```
+
+### Connection Timeouts
+
+The default timeout is 10 seconds. If you're experiencing timeouts with a slow network or heavily loaded server, you may need to adjust Guzzle's timeout configuration by extending the Client class.
+
+### Invalid API Key Errors
+
+Make sure you're using the full 64-character API key exactly as shown in the Phlag admin panel. Keys are case-sensitive and must be copied completely.
 
 ## Contributing
 

@@ -99,7 +99,7 @@ class PhlagClient
     {
         $return = null;
 
-        $endpoint = sprintf('/flag/%s/%s', $this->environment, $name);
+        $endpoint = sprintf('flag/%s/%s', $this->environment, $name);
         $return   = $this->client->get($endpoint);
 
         return $return;

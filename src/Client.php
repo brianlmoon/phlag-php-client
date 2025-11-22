@@ -41,6 +41,11 @@ class Client
     /**
      * Creates a new HTTP client for the Phlag API
      *
+     * The base URL is normalized by removing any trailing slash for storage,
+     * but adding it back when configuring Guzzle's base_uri. This ensures
+     * proper URI resolution per RFC 3986 when the base URL includes a
+     * subdirectory path.
+     *
      * @param string $base_url The base URL of the Phlag server (e.g., http://localhost:8000)
      * @param string $api_key  The 64-character API key for authentication
      */
@@ -50,7 +55,7 @@ class Client
         $this->api_key  = $api_key;
 
         $this->http_client = new GuzzleClient([
-            'base_uri' => $this->base_url,
+            'base_uri' => $this->base_url . '/',
             'timeout'  => 10,
             'headers'  => [
                 'Authorization' => 'Bearer ' . $this->api_key,
@@ -66,7 +71,12 @@ class Client
      * It throws specific exceptions for different error conditions to make
      * error handling easier for calling code.
      *
-     * @param string $endpoint The API endpoint path (e.g., /flag/production/feature_name)
+     * Heads-up: The endpoint should be a relative path (without leading slash)
+     * to properly work with base URLs that include subdirectories. Guzzle's
+     * base_uri resolution follows RFC 3986, where absolute paths (starting
+     * with /) replace the base URI path entirely.
+     *
+     * @param string $endpoint The API endpoint path (e.g., flag/production/feature_name)
      *
      * @return mixed The decoded JSON response
      *

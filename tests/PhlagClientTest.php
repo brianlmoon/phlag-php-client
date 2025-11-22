@@ -291,4 +291,170 @@ class PhlagClientTest extends TestCase
         $api_key_prop->setAccessible(true);
         $this->assertSame('my-api-key', $api_key_prop->getValue($client));
     }
+
+    /**
+     * Tests subdirectory base URL support
+     *
+     * When Phlag is installed in a subdirectory (e.g., /phlag), the client
+     * must correctly construct URLs that include the subdirectory path. This
+     * test verifies that relative endpoint paths work correctly with Guzzle's
+     * base_uri resolution.
+     */
+    public function testSubdirectoryBaseUrl(): void
+    {
+        $container = [];
+        $history   = \GuzzleHttp\Middleware::history($container);
+
+        $mock = new MockHandler([
+            new Response(200, [], 'true'),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'https://labs.moonspot.net/phlag/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $client = new PhlagClient(
+            'https://labs.moonspot.net/phlag',
+            'test-key',
+            'production'
+        );
+
+        // Inject the mocked Guzzle client
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        $result = $client->getFlag('feature_test');
+
+        $this->assertTrue($result);
+
+        // Verify the full URL includes the subdirectory
+        $this->assertCount(1, $container);
+        $request = $container[0]['request'];
+        $uri     = (string) $request->getUri();
+
+        $this->assertStringContainsString('/phlag/flag/production/feature_test', $uri);
+    }
+
+    /**
+     * Tests subdirectory with trailing slash is handled correctly
+     */
+    public function testSubdirectoryWithTrailingSlash(): void
+    {
+        $container = [];
+        $history   = \GuzzleHttp\Middleware::history($container);
+
+        $mock = new MockHandler([
+            new Response(200, [], '100'),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'https://labs.moonspot.net/phlag/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $client = new PhlagClient(
+            'https://labs.moonspot.net/phlag/',
+            'test-key',
+            'staging'
+        );
+
+        // Inject the mocked Guzzle client
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        $result = $client->getFlag('max_items');
+
+        $this->assertSame(100, $result);
+
+        // Verify URL is correct despite trailing slash in base URL
+        $this->assertCount(1, $container);
+        $request = $container[0]['request'];
+        $uri     = (string) $request->getUri();
+
+        // Should not have double slash
+        $this->assertStringNotContainsString('phlag//flag', $uri);
+        $this->assertStringContainsString('/phlag/flag/staging/max_items', $uri);
+    }
+
+    /**
+     * Tests deep subdirectory path support
+     */
+    public function testDeepSubdirectoryPath(): void
+    {
+        $container = [];
+        $history   = \GuzzleHttp\Middleware::history($container);
+
+        $mock = new MockHandler([
+            new Response(200, [], '"hello"'),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'https://example.com/apps/feature-flags/phlag/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $client = new PhlagClient(
+            'https://example.com/apps/feature-flags/phlag',
+            'test-key',
+            'development'
+        );
+
+        // Inject the mocked Guzzle client
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        $result = $client->getFlag('welcome_message');
+
+        $this->assertSame('hello', $result);
+
+        // Verify deep path is preserved
+        $this->assertCount(1, $container);
+        $request = $container[0]['request'];
+        $uri     = (string) $request->getUri();
+
+        $this->assertStringContainsString('/apps/feature-flags/phlag/flag/development/welcome_message', $uri);
+    }
 }
