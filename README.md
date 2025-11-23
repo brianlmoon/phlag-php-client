@@ -78,16 +78,16 @@ If your Phlag server is installed in a subdirectory, include the full path in th
 
 ```php
 $client = new PhlagClient(
-    base_url: 'https://labs.moonspot.net/phlag',  // Note: includes /phlag subdirectory
+    base_url: 'https://www.example.com/phlag',  // Note: includes /phlag subdirectory
     api_key: 'your-api-key',
     environment: 'production'
 );
 
 // Client will correctly request:
-// https://labs.moonspot.net/phlag/flag/production/feature_name
+// https://www.example.com/phlag/flag/production/feature_name
 ```
 
-The client automatically handles trailing slashes, so both `https://labs.moonspot.net/phlag` and `https://labs.moonspot.net/phlag/` work correctly.
+The client automatically handles trailing slashes, so both `https://www.example.com/phlag` and `https://www.example.com/phlag/` work correctly.
 
 ### Checking Feature Flags
 
@@ -440,10 +440,10 @@ If you're getting 404 errors and your Phlag server is installed in a subdirector
 
 ```php
 // Wrong - missing subdirectory
-$client = new PhlagClient('https://labs.moonspot.net', 'key', 'prod');
+$client = new PhlagClient('https://www.example.com', 'key', 'prod');
 
 // Correct - includes /phlag subdirectory
-$client = new PhlagClient('https://labs.moonspot.net/phlag', 'key', 'prod');
+$client = new PhlagClient('https://www.example.com/phlag', 'key', 'prod');
 ```
 
 ### Stale Cache Data
