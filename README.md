@@ -506,7 +506,6 @@ Built by Brian Moon (brian@moonspot.net)
 
 **Dependencies:**
 - [Guzzle HTTP Client](https://github.com/guzzle/guzzle) - HTTP communication
-- [Moonspot Value Objects](https://github.com/moonspot/value-objects) - Base classes
 
 ## Support
 
