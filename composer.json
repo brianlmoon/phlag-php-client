@@ -16,13 +16,13 @@
     },
     "require": {
         "php": "^8.2",
-        "guzzlehttp/guzzle": "^7.0",
+        "guzzlehttp/guzzle": "^7.10",
         "moonspot/value-objects": "^1.0 || ^2.0"
     },
     "require-dev": {
         "php-parallel-lint/php-parallel-lint": "^1.4",
         "phpunit/phpunit": "^11",
-        "friendsofphp/php-cs-fixer": "^3.88"
+        "friendsofphp/php-cs-fixer": "^3.89"
     },
     "autoload": {
         "psr-4": {
