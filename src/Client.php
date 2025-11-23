@@ -38,6 +38,11 @@ class Client {
     protected string $base_url;
 
     /**
+     * @var int The request timeout in seconds
+     */
+    protected int $timeout;
+
+    /**
      * Creates a new HTTP client for the Phlag API
      *
      * The base URL is normalized by removing any trailing slash for storage,
@@ -47,14 +52,16 @@ class Client {
      *
      * @param string $base_url The base URL of the Phlag server (e.g., http://localhost:8000)
      * @param string $api_key  The 64-character API key for authentication
+     * @param int    $timeout  The request timeout in seconds (default: 10)
      */
-    public function __construct(string $base_url, string $api_key) {
+    public function __construct(string $base_url, string $api_key, int $timeout = 10) {
         $this->base_url = rtrim($base_url, '/');
         $this->api_key  = $api_key;
+        $this->timeout  = $timeout;
 
         $this->http_client = new GuzzleClient([
             'base_uri' => $this->base_url . '/',
-            'timeout'  => 10,
+            'timeout'  => $this->timeout,
             'headers'  => [
                 'Authorization' => 'Bearer ' . $this->api_key,
                 'Accept'        => 'application/json',

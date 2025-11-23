@@ -15,7 +15,8 @@ namespace Moonspot\PhlagClient;
  * $client = new PhlagClient(
  *     base_url: 'http://localhost:8000',
  *     api_key: 'your-64-char-api-key',
- *     environment: 'production'
+ *     environment: 'production',
+ *     timeout: 15
  * );
  *
  * // Check a boolean flag
@@ -66,6 +67,11 @@ class PhlagClient {
     protected int $cache_ttl;
 
     /**
+     * @var int The HTTP request timeout in seconds
+     */
+    protected int $timeout;
+
+    /**
      * @var array|null The in-memory flag cache
      */
     protected ?array $flag_cache = null;
@@ -88,6 +94,7 @@ class PhlagClient {
      * @param bool        $cache       Enable file-based caching (default: false)
      * @param string|null $cache_file  Custom cache file path (default: auto-generated in sys temp dir)
      * @param int         $cache_ttl   Cache time-to-live in seconds (default: 300)
+     * @param int         $timeout     HTTP request timeout in seconds (default: 10)
      */
     public function __construct(
         string $base_url,
@@ -95,14 +102,16 @@ class PhlagClient {
         string $environment,
         bool $cache = false,
         ?string $cache_file = null,
-        int $cache_ttl = 300
+        int $cache_ttl = 300,
+        int $timeout = 10
     ) {
         $this->base_url      = $base_url;
         $this->api_key       = $api_key;
         $this->environment   = $environment;
         $this->cache_enabled = $cache;
         $this->cache_ttl     = $cache_ttl;
-        $this->client        = new Client($base_url, $api_key);
+        $this->timeout       = $timeout;
+        $this->client        = new Client($base_url, $api_key, $timeout);
 
         // Generate cache filename if not provided
         if ($cache_file === null) {
@@ -223,7 +232,8 @@ class PhlagClient {
             $environment,
             $this->cache_enabled,
             null, // Let new instance generate its own cache file
-            $this->cache_ttl
+            $this->cache_ttl,
+            $this->timeout
         );
 
         return $return;
@@ -391,5 +401,14 @@ class PhlagClient {
      */
     public function getCacheTtl(): int {
         return $this->cache_ttl;
+    }
+
+    /**
+     * Gets the HTTP request timeout in seconds
+     *
+     * @return int The HTTP request timeout in seconds
+     */
+    public function getTimeout(): int {
+        return $this->timeout;
     }
 }

@@ -439,4 +439,80 @@ class PhlagClientTest extends TestCase {
 
         $this->assertStringContainsString('/apps/feature-flags/phlag/flag/development/welcome_message', $uri);
     }
+
+    /**
+     * Tests that default timeout is 10 seconds
+     */
+    public function testDefaultTimeout(): void {
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-api-key',
+            'production'
+        );
+
+        $this->assertSame(10, $client->getTimeout());
+    }
+
+    /**
+     * Tests that custom timeout is stored
+     */
+    public function testCustomTimeout(): void {
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-api-key',
+            'production',
+            false,
+            null,
+            300,
+            30
+        );
+
+        $this->assertSame(30, $client->getTimeout());
+    }
+
+    /**
+     * Tests that timeout is passed to the internal Client
+     */
+    public function testTimeoutPassedToClient(): void {
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-api-key',
+            'production',
+            false,
+            null,
+            300,
+            25
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $timeout_prop      = $client_reflection->getProperty('timeout');
+        $timeout_prop->setAccessible(true);
+
+        $this->assertSame(25, $timeout_prop->getValue($internal_client));
+    }
+
+    /**
+     * Tests that withEnvironment preserves timeout
+     */
+    public function testWithEnvironmentPreservesTimeout(): void {
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-api-key',
+            'production',
+            false,
+            null,
+            300,
+            20
+        );
+
+        $new_client = $client->withEnvironment('staging');
+
+        $this->assertSame(20, $new_client->getTimeout());
+        $this->assertSame('staging', $new_client->getEnvironment());
+    }
 }
