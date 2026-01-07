@@ -283,7 +283,7 @@ class PhlagClient {
 
             if ($mtime !== false && (time() - $mtime) < $this->cache_ttl) {
 
-                // file_exists is called twice because on high write latency filesystems (NFS, AWS, etc.)
+                // file_exists is called twice because on high write latency network filesystems (e.g., NFS, Amazon EFS, etc.)
                 // one process could be warming the cache at the same time that another process is trying to load the
                 // cache causing the file_get_contents function to fail even though the earlier file_exists passed.
                 if (file_exists($this->cache_file)) {
