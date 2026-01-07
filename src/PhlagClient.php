@@ -335,6 +335,7 @@ class PhlagClient {
         clearstatcache();
         if(file_exists($this->cache_file) && md5_file($temp_file) === md5_file($this->cache_file)) {
             touch($this->cache_file);
+            @unlink($temp_file); // Clean up temp file when contents are identical
             return;
         }
 
