@@ -277,19 +277,26 @@ class PhlagClient {
      */
     protected function loadCache(): void {
         // Check if cache file exists and is valid
+        clearstatcache();
         if (file_exists($this->cache_file)) {
             $mtime = filemtime($this->cache_file);
 
             if ($mtime !== false && (time() - $mtime) < $this->cache_ttl) {
-                $contents = file_get_contents($this->cache_file);
 
-                if ($contents !== false) {
-                    $data = json_decode($contents, true);
+                // file_exists is called twice because on high write latency network filesystems (e.g., NFS, Amazon EFS, etc.)
+                // one process could be warming the cache at the same time that another process is trying to load the
+                // cache causing the file_get_contents function to fail even though the earlier file_exists passed.
+                if (file_exists($this->cache_file)) {
+                    $contents = file_get_contents($this->cache_file);
 
-                    if (json_last_error() === JSON_ERROR_NONE && is_array($data)) {
-                        $this->flag_cache = $data;
+                    if ($contents !== false) {
+                        $data = json_decode($contents, true);
 
-                        return;
+                        if (json_last_error() === JSON_ERROR_NONE && is_array($data)) {
+                            $this->flag_cache = $data;
+
+                            return;
+                        }
                     }
                 }
             }
@@ -320,6 +327,15 @@ class PhlagClient {
         if (@file_put_contents($temp_file, json_encode($this->flag_cache)) === false) {
             error_log("Phlag: Unable to write cache file: {$this->cache_file}");
 
+            return;
+        }
+
+        // if the new file and the current file are the same, simply touch the existing file to avoid
+        // non-atomic renames on high write latency filesystems (NFS, AWS, etc.).
+        clearstatcache();
+        if(file_exists($this->cache_file) && md5_file($temp_file) === md5_file($this->cache_file)) {
+            touch($this->cache_file);
+            @unlink($temp_file); // Clean up temp file when contents are identical
             return;
         }
 
