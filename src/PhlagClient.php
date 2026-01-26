@@ -154,8 +154,8 @@ class PhlagClient {
         $return = null;
 
         if ($this->cache_enabled) {
-            // Lazy load cache on first request
-            if ($this->flag_cache === null) {
+            // Lazy load cache on first request or anytime when running in the CLI
+            if ($this->flag_cache === null || php_sapi_name() === 'cli') {
                 $this->loadCache();
             }
 
