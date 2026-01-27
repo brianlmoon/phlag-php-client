@@ -77,6 +77,11 @@ class PhlagClient {
     protected ?array $flag_cache = null;
 
     /**
+     * @var int the last time the cache was loaded
+     */
+    protected int $flag_cache_last_loaded = 0;
+
+    /**
      * Creates a new Phlag client for a specific environment
      *
      * The environment is set at construction time and all flag requests will
@@ -154,9 +159,10 @@ class PhlagClient {
         $return = null;
 
         if ($this->cache_enabled) {
-            // Lazy load cache on first request or anytime when running in the CLI
-            if ($this->flag_cache === null || php_sapi_name() === 'cli') {
+            // Lazy load cache on first request or anytime when running in the CLI and the TTL has passed
+            if ($this->flag_cache === null || time() - $this->flag_cache_last_loaded > $this->cache_ttl) {
                 $this->loadCache();
+                $this->flag_cache_last_loaded = time();
             }
 
             $return = $this->flag_cache[$name] ?? null;
@@ -276,6 +282,9 @@ class PhlagClient {
      * @throws Exception\PhlagException               For other API errors
      */
     protected function loadCache(): void {
+
+        $this->flag_cache = null;
+
         // Check if cache file exists and is valid
         clearstatcache();
         if (file_exists($this->cache_file)) {
@@ -294,20 +303,20 @@ class PhlagClient {
 
                         if (json_last_error() === JSON_ERROR_NONE && is_array($data)) {
                             $this->flag_cache = $data;
-
-                            return;
                         }
                     }
                 }
             }
         }
 
-        // Cache miss or expired - fetch from API
-        $endpoint         = sprintf('all-flags/%s', $this->environment);
-        $this->flag_cache = $this->client->get($endpoint);
+        if(empty($this->flag_cache)) {
+            // Cache miss or expired - fetch from API
+            $endpoint         = sprintf('all-flags/%s', $this->environment);
+            $this->flag_cache = $this->client->get($endpoint);
 
-        // Write to cache file using atomic write
-        $this->writeCacheFile();
+            // Write to cache file using atomic write
+            $this->writeCacheFile();
+        }
     }
 
     /**
