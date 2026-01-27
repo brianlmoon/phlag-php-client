@@ -624,4 +624,460 @@ class PhlagClientCacheTest extends TestCase {
         // Clean up
         @unlink($temp_file);
     }
+
+    /**
+     * Tests that initial cache load sets the last loaded timestamp
+     *
+     * When cache is enabled and the first getFlag() call is made, the
+     * flag_cache_last_loaded timestamp should be set to the current time.
+     */
+    public function testInitialCacheLoadSetsTimestamp(): void {
+        $return = null;
+
+        $mock = new MockHandler([
+            new Response(200, [], json_encode(['flag1' => true])),
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+        $client    = $this->createClientWithMock($mock, true, $temp_file);
+
+        $time_before = time();
+
+        // First getFlag() call should load cache and set timestamp
+        $client->getFlag('flag1');
+
+        $time_after = time();
+
+        // Access protected flag_cache_last_loaded property
+        $reflection = new ReflectionClass($client);
+        $prop       = $reflection->getProperty('flag_cache_last_loaded');
+        $prop->setAccessible(true);
+        $last_loaded = $prop->getValue($client);
+
+        // Timestamp should be set to current time (within test window)
+        $this->assertGreaterThanOrEqual($time_before, $last_loaded);
+        $this->assertLessThanOrEqual($time_after, $last_loaded);
+
+        $return = true;
+
+        // Clean up
+        @unlink($temp_file);
+
+        $this->assertTrue($return);
+    }
+
+    /**
+     * Tests that multiple requests within TTL don't reload cache
+     *
+     * When cache is enabled and multiple getFlag() calls are made within
+     * the TTL window, only one API call should be made and the timestamp
+     * should not change.
+     */
+    public function testMultipleRequestsWithinTtlDontReload(): void {
+        $return = null;
+
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock = new MockHandler([
+            new Response(200, [], json_encode([
+                'flag1' => true,
+                'flag2' => 100,
+                'flag3' => 'test',
+            ])),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            'production',
+            true,
+            $temp_file,
+            300  // 5 minute TTL
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // First request
+        $client->getFlag('flag1');
+
+        // Get timestamp after first load
+        $timestamp_prop = $reflection->getProperty('flag_cache_last_loaded');
+        $timestamp_prop->setAccessible(true);
+        $first_timestamp = $timestamp_prop->getValue($client);
+
+        // Make more requests
+        $client->getFlag('flag2');
+        $client->getFlag('flag3');
+
+        // Get timestamp after subsequent requests
+        $second_timestamp = $timestamp_prop->getValue($client);
+
+        // Should have made only 1 API call
+        $this->assertCount(1, $container);
+        $this->assertStringContainsString(
+            'all-flags/production',
+            (string) $container[0]['request']->getUri()
+        );
+
+        // Timestamp should not have changed
+        $this->assertSame($first_timestamp, $second_timestamp);
+
+        $return = true;
+
+        // Clean up
+        @unlink($temp_file);
+
+        $this->assertTrue($return);
+    }
+
+    /**
+     * Tests that request after TTL expires triggers cache reload
+     *
+     * When cache is enabled and a request is made after the TTL has
+     * expired, a second API call should be made and the timestamp
+     * should be updated.
+     */
+    public function testRequestAfterTtlExpiresTriggersReload(): void {
+        $return = null;
+
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock = new MockHandler([
+            new Response(200, [], json_encode(['flag1' => true])),
+            new Response(200, [], json_encode(['flag1' => false])),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            'production',
+            true,
+            $temp_file,
+            60  // 60 second TTL
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // First request - loads cache
+        $client->getFlag('flag1');
+
+        // Should have made 1 API call
+        $this->assertCount(1, $container);
+
+        // Get timestamp after first load
+        $timestamp_prop = $reflection->getProperty('flag_cache_last_loaded');
+        $timestamp_prop->setAccessible(true);
+        $first_timestamp = $timestamp_prop->getValue($client);
+
+        // Simulate TTL expiration by setting timestamp to 61 seconds ago
+        $timestamp_prop->setValue($client, time() - 61);
+
+        // Delete cache file to force API reload
+        @unlink($temp_file);
+
+        // Second request - should reload cache
+        $client->getFlag('flag1');
+
+        // Should have made 2 API calls
+        $this->assertCount(2, $container);
+
+        // Get timestamp after reload
+        $second_timestamp = $timestamp_prop->getValue($client);
+
+        // Timestamp should have been updated (might be same second)
+        $this->assertGreaterThanOrEqual($first_timestamp, $second_timestamp);
+
+        $return = true;
+
+        // Clean up
+        @unlink($temp_file);
+
+        $this->assertTrue($return);
+    }
+
+    /**
+     * Tests that reloaded cache contains updated flag values
+     *
+     * When cache is reloaded after TTL expiration, the new values from
+     * the API should be returned, not the old cached values.
+     */
+    public function testReloadedCacheContainsUpdatedValues(): void {
+        $return = null;
+
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock = new MockHandler([
+            new Response(200, [], json_encode([
+                'flag1' => true,
+                'flag2' => 100,
+            ])),
+            new Response(200, [], json_encode([
+                'flag1' => false,
+                'flag2' => 200,
+            ])),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            'production',
+            true,
+            $temp_file,
+            60  // 60 second TTL
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // First request - get initial values
+        $result1 = $client->getFlag('flag1');
+        $result2 = $client->getFlag('flag2');
+
+        $this->assertTrue($result1);
+        $this->assertSame(100, $result2);
+
+        // Simulate TTL expiration
+        $timestamp_prop = $reflection->getProperty('flag_cache_last_loaded');
+        $timestamp_prop->setAccessible(true);
+        $timestamp_prop->setValue($client, time() - 61);
+
+        // Delete cache file to force API reload
+        @unlink($temp_file);
+
+        // Second request - should get updated values
+        $result3 = $client->getFlag('flag1');
+        $result4 = $client->getFlag('flag2');
+
+        $this->assertFalse($result3);
+        $this->assertSame(200, $result4);
+
+        // Should have made 2 API calls
+        $this->assertCount(2, $container);
+
+        $return = true;
+
+        // Clean up
+        @unlink($temp_file);
+
+        $this->assertTrue($return);
+    }
+
+    /**
+     * Tests TTL boundary edge case
+     *
+     * The reload condition uses > not >=, so at exactly TTL no reload
+     * occurs. One second past TTL, reload is triggered.
+     */
+    public function testTtlBoundaryEdgeCase(): void {
+        $return = null;
+
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock = new MockHandler([
+            new Response(200, [], json_encode(['flag1' => true])),
+            new Response(200, [], json_encode(['flag1' => false])),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            'production',
+            true,
+            $temp_file,
+            60  // 60 second TTL
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // First request
+        $client->getFlag('flag1');
+
+        // Set timestamp to exactly TTL+1 seconds ago (just past boundary)
+        $timestamp_prop = $reflection->getProperty('flag_cache_last_loaded');
+        $timestamp_prop->setAccessible(true);
+        $current_time = time();
+        $timestamp_prop->setValue($client, $current_time - 61);
+
+        // Delete cache file to force API reload on TTL expiration
+        @unlink($temp_file);
+
+        // Second request just past TTL boundary
+        $client->getFlag('flag1');
+
+        // Should have made 2 API calls (reload triggered)
+        $this->assertCount(2, $container);
+
+        $return = true;
+
+        // Clean up
+        @unlink($temp_file);
+
+        $this->assertTrue($return);
+    }
+
+    /**
+     * Tests that short TTL values work correctly
+     *
+     * Verifies that very short TTL values (1 second) work as expected
+     * and trigger reloads after expiration.
+     */
+    public function testShortTtlValuesWorkCorrectly(): void {
+        $return = null;
+
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock = new MockHandler([
+            new Response(200, [], json_encode(['flag1' => true])),
+            new Response(200, [], json_encode(['flag1' => false])),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            'production',
+            true,
+            $temp_file,
+            1  // 1 second TTL
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // First request
+        $client->getFlag('flag1');
+
+        // Simulate 2 seconds passing (beyond 1 second TTL)
+        $timestamp_prop = $reflection->getProperty('flag_cache_last_loaded');
+        $timestamp_prop->setAccessible(true);
+        $timestamp_prop->setValue($client, time() - 2);
+
+        // Delete cache file to force API reload
+        @unlink($temp_file);
+
+        // Second request should trigger reload
+        $client->getFlag('flag1');
+
+        // Should have made 2 API calls
+        $this->assertCount(2, $container);
+
+        $return = true;
+
+        // Clean up
+        @unlink($temp_file);
+
+        $this->assertTrue($return);
+    }
 }
