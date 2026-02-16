@@ -329,7 +329,7 @@ class PhlagClient {
      * @return void
      */
     protected function writeCacheFile(): void {
-        // Use process ID to create unique temp filename
+        // Use random bytes to create unique temp filename
         $temp_file = $this->cache_file . '.' . bin2hex(random_bytes(16)) . '.tmp';
 
         // Write to temp file first
