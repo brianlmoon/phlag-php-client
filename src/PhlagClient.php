@@ -330,12 +330,11 @@ class PhlagClient {
      */
     protected function writeCacheFile(): void {
         // Use process ID to create unique temp filename
-        $temp_file = $this->cache_file . '.' . getmypid() . '.tmp';
+        $temp_file = $this->cache_file . '.' . bin2hex(random_bytes(16)) . '.tmp';
 
         // Write to temp file first
         if (@file_put_contents($temp_file, json_encode($this->flag_cache)) === false) {
-            error_log("Phlag: Unable to write cache file: {$this->cache_file}");
-
+            trigger_error("Phlag: Unable to write cache file: {$this->cache_file}", E_USER_WARNING);
             return;
         }
 
@@ -350,7 +349,7 @@ class PhlagClient {
 
         // Atomic rename (POSIX systems)
         if (@rename($temp_file, $this->cache_file) === false) {
-            error_log("Phlag: Unable to rename cache file: {$temp_file} to {$this->cache_file}");
+            trigger_error("Phlag: Unable to rename cache file: {$temp_file} to {$this->cache_file}", E_USER_WARNING);
             @unlink($temp_file); // Clean up temp file
         }
     }
