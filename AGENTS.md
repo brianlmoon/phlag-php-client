@@ -164,7 +164,7 @@ Methods still use `camelCase`: `getFlag()`, `withEnvironment()`, `clearCache()`
 ```php
 // ✓ Preferred
 protected Client $client;
-protected string $environment;
+protected array $environments;
 
 // ✗ Avoid (unless you have a reason)
 private Client $client;
