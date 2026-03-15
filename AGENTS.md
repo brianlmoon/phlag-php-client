@@ -244,7 +244,6 @@ Union types (PHP 8.0+) are encouraged: `bool|int|float|string`
  * @return bool|int|float|string|null The flag value or null
  *
  * @throws AuthenticationException If API key is invalid
- * @throws InvalidFlagException If flag doesn't exist (cache disabled only)
  * @throws NetworkException If network communication fails
  */
 public function getFlag(string $name): mixed {
