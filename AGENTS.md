@@ -378,15 +378,16 @@ protected function parseValue(string $value): bool|int|float|string {
 
 ### Cache File Naming
 
-Cache files use MD5 hash of base URL + environment:
+Cache files use an MD5 hash of the base URL plus the joined environments array:
 
 ```php
-// Auto-generated filename
-$hash = md5($this->base_url . $this->environment);
+// Auto-generated filename (per base URL + environment set)
+$envKey = implode(',', $this->environments);
+$hash = md5($this->base_url . $envKey);
 $cache_file = sys_get_temp_dir() . '/phlag_cache_' . $hash . '.json';
 ```
 
-**Why MD5?** Ensures unique cache file per server+environment combo without path/URL encoding issues.
+**Why MD5?** Ensures a unique cache file per server+environment-set combo without path/URL encoding issues.
 
 ---
 
