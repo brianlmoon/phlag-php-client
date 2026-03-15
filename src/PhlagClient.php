@@ -37,9 +37,9 @@ class PhlagClient {
     protected Client $client;
 
     /**
-     * @var string The environment name for flag lookups
+     * @var array The environment names for flag lookups (with fallback)
      */
-    protected string $environment;
+    protected array $environments;
 
     /**
      * @var string The base URL of the Phlag server
@@ -82,29 +82,34 @@ class PhlagClient {
     protected int $flag_cache_last_loaded = 0;
 
     /**
-     * Creates a new Phlag client for a specific environment
+     * Creates a new Phlag client for one or more environments
      *
-     * The environment is set at construction time and all flag requests will
-     * use this environment. To query a different environment, create a new
-     * instance or use the withEnvironment() method.
+     * The environment(s) are set at construction time and all flag requests
+     * will use these environments. When multiple environments are provided,
+     * they act as a fallback chain: if a flag returns null in the first
+     * environment, the second is checked, and so on.
      *
-     * When caching is enabled, the client fetches all flags for the environment
-     * once using the /all-flags endpoint and serves subsequent requests from
-     * the cached data. This dramatically reduces API calls but means flag
-     * changes won't be reflected until the cache expires (default 5 minutes).
+     * Heads-up: Only null triggers fallback. Values like false, 0, and ""
+     * are considered "set" and stop the fallback chain.
      *
-     * @param string      $base_url    The base URL of the Phlag server (e.g., http://localhost:8000)
-     * @param string      $api_key     The 64-character API key for authentication
-     * @param string      $environment The environment name (e.g., production, staging, development)
-     * @param bool        $cache       Enable file-based caching (default: false)
-     * @param string|null $cache_file  Custom cache file path (default: auto-generated in sys temp dir)
-     * @param int         $cache_ttl   Cache time-to-live in seconds (default: 300)
-     * @param int         $timeout     HTTP request timeout in seconds (default: 10)
+     * When caching is enabled, the client fetches all flags for ALL
+     * environments once using the /all-flags endpoint and serves subsequent
+     * requests from the cached data. This dramatically reduces API calls but
+     * means flag changes won't be reflected until the cache expires (default
+     * 5 minutes).
+     *
+     * @param string       $base_url    The base URL of the Phlag server (e.g., http://localhost:8000)
+     * @param string       $api_key     The 64-character API key for authentication
+     * @param string|array $environment Single environment name or array of environments for fallback
+     * @param bool         $cache       Enable file-based caching (default: false)
+     * @param string|null  $cache_file  Custom cache file path (default: auto-generated in sys temp dir)
+     * @param int          $cache_ttl   Cache time-to-live in seconds (default: 300)
+     * @param int          $timeout     HTTP request timeout in seconds (default: 10)
      */
     public function __construct(
         string $base_url,
         string $api_key,
-        string $environment,
+        string|array $environment,
         bool $cache = false,
         ?string $cache_file = null,
         int $cache_ttl = 300,
@@ -112,11 +117,17 @@ class PhlagClient {
     ) {
         $this->base_url      = $base_url;
         $this->api_key       = $api_key;
-        $this->environment   = $environment;
         $this->cache_enabled = $cache;
         $this->cache_ttl     = $cache_ttl;
         $this->timeout       = $timeout;
         $this->client        = new Client($base_url, $api_key, $timeout);
+
+        // Normalize environment to array
+        if (is_string($environment)) {
+            $this->environments = [$environment];
+        } else {
+            $this->environments = $environment;
+        }
 
         // Generate cache filename if not provided
         if ($cache_file === null) {
@@ -127,30 +138,36 @@ class PhlagClient {
     }
 
     /**
-     * Gets the value of a single feature flag
+     * Gets the value of a single feature flag with environment fallback
      *
      * This method retrieves the current value of a flag from the configured
-     * environment. The return type depends on the flag type:
+     * environment(s). When multiple environments are configured, it implements
+     * fallback logic: if the flag returns null in the first environment, it
+     * queries the second, and so on.
+     *
+     * Heads-up: Only null triggers fallback. Values like false, 0, and ""
+     * are considered "set" and stop the fallback chain.
+     *
+     * The return type depends on the flag type:
      *
      * - SWITCH flags return boolean (true/false)
      * - INTEGER flags return int or null
      * - FLOAT flags return float or null
      * - STRING flags return string or null
      *
-     * Flags return null when they don't exist, aren't configured for the
+     * Flags return null when they don't exist, aren't configured for any
      * environment, or are outside their temporal constraints (for non-SWITCH
      * types). SWITCH flags return false when inactive.
      *
      * When caching is enabled, this method serves values from the in-memory
      * cache (populated on first request). When caching is disabled, each call
-     * makes a direct API request to /flag/{environment}/{name}.
+     * may make multiple API requests if earlier environments return null.
      *
      * @param string $name The flag name
      *
      * @return mixed The flag value (bool, int, float, string, or null)
      *
      * @throws Exception\AuthenticationException      When the API key is invalid
-     * @throws Exception\InvalidFlagException         When the flag doesn't exist (cache disabled only)
      * @throws Exception\InvalidEnvironmentException  When the environment doesn't exist
      * @throws Exception\NetworkException             When network communication fails
      * @throws Exception\PhlagException               For other errors
@@ -167,9 +184,23 @@ class PhlagClient {
 
             $return = $this->flag_cache[$name] ?? null;
         } else {
-            // Use direct API call
-            $endpoint = sprintf('flag/%s/%s', $this->environment, $name);
-            $return   = $this->client->get($endpoint);
+            // Use direct API call with fallback through environments
+            foreach ($this->environments as $environment) {
+                $endpoint = sprintf('flag/%s/%s', $environment, $name);
+
+                try {
+                    $value = $this->client->get($endpoint);
+
+                    // Only null triggers fallback - false, 0, "" are valid values
+                    if ($value !== null) {
+                        $return = $value;
+                        break;
+                    }
+                } catch (Exception\InvalidFlagException $e) {
+                    // Flag doesn't exist in this environment - continue to next
+                    continue;
+                }
+            }
         }
 
         return $return;
@@ -207,31 +238,35 @@ class PhlagClient {
     }
 
     /**
-     * Gets the current environment name
+     * Gets the configured environment names
      *
-     * @return string The environment name
+     * Returns an array of environment names, even if only one environment
+     * was configured. When multiple environments are configured, they
+     * represent the fallback chain order.
+     *
+     * @return array The environment names
      */
-    public function getEnvironment(): string {
-        return $this->environment;
+    public function getEnvironment(): array {
+        return $this->environments;
     }
 
     /**
-     * Creates a new client instance with a different environment
+     * Creates a new client instance with different environment(s)
      *
-     * This method returns a new PhlagClient instance configured for a different
-     * environment while reusing the same base URL and API key. This is useful
-     * when you need to query multiple environments without maintaining multiple
-     * client instances.
+     * This method returns a new PhlagClient instance configured for different
+     * environment(s) while reusing the same base URL and API key. This is
+     * useful when you need to query multiple environments without maintaining
+     * multiple client instances.
      *
      * The original client instance is not modified (immutable pattern). Cache
      * settings are preserved, but a new cache file is generated for the new
-     * environment to prevent cache collisions.
+     * environment(s) to prevent cache collisions.
      *
-     * @param string $environment The new environment name
+     * @param string|array $environment Single environment name or array of environments
      *
-     * @return self A new PhlagClient instance for the specified environment
+     * @return self A new PhlagClient instance for the specified environment(s)
      */
-    public function withEnvironment(string $environment): self {
+    public function withEnvironment(string|array $environment): self {
         $return = new self(
             $this->base_url,
             $this->api_key,
@@ -246,19 +281,21 @@ class PhlagClient {
     }
 
     /**
-     * Generates a cache filename based on base URL and environment
+     * Generates a cache filename based on base URL and environment(s)
      *
      * The filename is generated using an MD5 hash of the base URL and
-     * environment name to ensure uniqueness across different Phlag servers
-     * and environments. The file is placed in the system temp directory.
+     * all environment names to ensure uniqueness across different Phlag
+     * servers and environment configurations. The file is placed in the
+     * system temp directory.
      *
      * @return string The absolute path to the cache file
      */
     protected function generateCacheFilename(): string {
         $return = null;
 
-        $hash   = md5($this->base_url . '|' . $this->environment);
-        $return = sys_get_temp_dir() . '/phlag_cache_' . $hash . '.json';
+        $env_string = implode('|', $this->environments);
+        $hash       = md5($this->base_url . '|' . $env_string);
+        $return     = sys_get_temp_dir() . '/phlag_cache_' . $hash . '.json';
 
         return $return;
     }
@@ -268,8 +305,11 @@ class PhlagClient {
      *
      * This method first checks if a valid cache file exists. If the file
      * exists and hasn't expired (based on file mtime and TTL), it loads
-     * the cached data. Otherwise, it fetches all flags from the API using
-     * the /all-flags endpoint and writes the cache file.
+     * the cached data. Otherwise, it fetches all flags from the API.
+     *
+     * When multiple environments are configured, this method fetches flags
+     * from ALL environments and merges them. Primary (first) environment
+     * values take precedence over secondary environments.
      *
      * Cache file write failures are logged but don't throw exceptions,
      * allowing graceful degradation to cache-less operation.
@@ -309,14 +349,43 @@ class PhlagClient {
             }
         }
 
-        if(empty($this->flag_cache)) {
-            // Cache miss or expired - fetch from API
-            $endpoint         = sprintf('all-flags/%s', $this->environment);
-            $this->flag_cache = $this->client->get($endpoint);
+        if (empty($this->flag_cache)) {
+            // Cache miss or expired - fetch from API and merge
+            $this->flag_cache = $this->fetchAndMergeFlags();
 
             // Write to cache file using atomic write
             $this->writeCacheFile();
         }
+    }
+
+    /**
+     * Fetches flags from all configured environments and merges them
+     *
+     * This method queries the /all-flags endpoint for each environment
+     * and merges the results. The merge happens in reverse order so that
+     * earlier (primary) environments override later (fallback) environments.
+     *
+     * @return array The merged flag data
+     *
+     * @throws Exception\AuthenticationException      When the API key is invalid
+     * @throws Exception\InvalidEnvironmentException  When an environment doesn't exist
+     * @throws Exception\NetworkException             When network communication fails
+     * @throws Exception\PhlagException               For other API errors
+     */
+    protected function fetchAndMergeFlags(): array {
+        $return = [];
+
+        // Fetch flags from all environments in reverse order
+        // so earlier environments override later ones
+        $reversed_environments = array_reverse($this->environments);
+
+        foreach ($reversed_environments as $environment) {
+            $endpoint     = sprintf('all-flags/%s', $environment);
+            $flags        = $this->client->get($endpoint);
+            $return       = array_merge($return, $flags);
+        }
+
+        return $return;
     }
 
     /**
@@ -335,15 +404,17 @@ class PhlagClient {
         // Write to temp file first
         if (@file_put_contents($temp_file, json_encode($this->flag_cache)) === false) {
             trigger_error("Phlag: Unable to write cache file: {$this->cache_file}", E_USER_WARNING);
+
             return;
         }
 
         // if the new file and the current file are the same, simply touch the existing file to avoid
         // non-atomic renames on high write latency filesystems (NFS, AWS, etc.).
         clearstatcache();
-        if(file_exists($this->cache_file) && md5_file($temp_file) === md5_file($this->cache_file)) {
+        if (file_exists($this->cache_file) && md5_file($temp_file) === md5_file($this->cache_file)) {
             touch($this->cache_file);
             @unlink($temp_file); // Clean up temp file when contents are identical
+
             return;
         }
 

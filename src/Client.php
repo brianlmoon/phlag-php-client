@@ -117,7 +117,8 @@ class Client {
 
             if ($status_code === 404) {
                 // Determine if this is a flag or environment error based on the endpoint
-                if (str_contains($endpoint, '/flag/')) {
+                // Handle both with and without leading slash: "flag/" or "/flag/"
+                if (str_starts_with($endpoint, 'flag/') || str_starts_with($endpoint, '/flag/')) {
                     throw new InvalidFlagException(
                         'Flag not found: ' . $endpoint,
                         2,

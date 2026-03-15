@@ -1080,4 +1080,140 @@ class PhlagClientCacheTest extends TestCase {
 
         $this->assertTrue($return);
     }
+
+    /**
+     * Tests multi-environment cache fetches all environments
+     */
+    public function testMultiEnvironmentCacheFetchesAll(): void {
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock = new MockHandler([
+            new Response(200, [], json_encode(['flag1' => 'staging-value'])),
+            new Response(200, [], json_encode(['flag1' => 'production-value', 'flag2' => 'prod-only'])),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            ['production', 'staging'],
+            true,
+            $temp_file
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // First request loads cache
+        $result1 = $client->getFlag('flag1');
+        $result2 = $client->getFlag('flag2');
+
+        // Should have made 2 API calls (one per environment)
+        $this->assertCount(2, $container);
+
+        // Production value should win for flag1
+        $this->assertSame('production-value', $result1);
+
+        // flag2 only exists in production
+        $this->assertSame('prod-only', $result2);
+
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests multi-environment cache merge priority
+     */
+    public function testMultiEnvironmentCacheMergePriority(): void {
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock = new MockHandler([
+            new Response(200, [], json_encode([
+                'flag1' => 'dev-value',
+                'flag2' => 'dev-only',
+            ])),
+            new Response(200, [], json_encode([
+                'flag1' => 'staging-value',
+                'flag3' => 'staging-only',
+            ])),
+            new Response(200, [], json_encode([
+                'flag1' => 'production-value',
+                'flag4' => 'production-only',
+            ])),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            ['production', 'staging', 'development'],
+            true,
+            $temp_file
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // Load cache
+        $result1 = $client->getFlag('flag1');
+        $result2 = $client->getFlag('flag2');
+        $result3 = $client->getFlag('flag3');
+        $result4 = $client->getFlag('flag4');
+
+        // Should have made 3 API calls (one per environment)
+        $this->assertCount(3, $container);
+
+        // Production value wins (first environment)
+        $this->assertSame('production-value', $result1);
+
+        // Each flag exists only in its environment
+        $this->assertSame('dev-only', $result2);
+        $this->assertSame('staging-only', $result3);
+        $this->assertSame('production-only', $result4);
+
+        // Clean up
+        @unlink($temp_file);
+    }
 }
