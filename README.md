@@ -89,6 +89,88 @@ $client = new PhlagClient(
 
 The client automatically handles trailing slashes, so both `https://www.example.com/phlag` and `https://www.example.com/phlag/` work correctly.
 
+### Multi-Environment Fallback
+
+Configure multiple environments for automatic fallback. If a flag returns `null` in the first environment, it checks the next environment, and so on:
+
+```php
+// Configure with fallback chain: staging → development
+$client = new PhlagClient(
+    base_url: 'http://localhost:8000',
+    api_key: 'your-api-key',
+    environment: ['staging', 'development']
+);
+
+// Query a flag - automatically falls back through environments
+$value = $client->getFlag('feature_beta');
+// Returns value from staging, or development if not set in staging
+```
+
+**⚠️ Use Case: Development & QA Only**
+
+Multi-environment fallback is designed for **development and QA environments**, not production. It's useful when:
+
+- **Local development:** Fall back from your feature branch environment to staging or development
+- **QA testing:** Test with production-like config while allowing QA-specific overrides
+- **Staging environments:** Inherit production flags but override specific features for testing
+
+**Do NOT use in production.** Production should query a single, explicit environment to avoid:
+- Unpredictable behavior when flags are missing
+- Hidden configuration issues masked by fallback
+- Performance overhead from multiple API calls (without caching)
+- Audit/compliance concerns about which environment provided the value
+
+```php
+// ✓ Good: Development with fallback
+$dev_client = new PhlagClient($url, $key, ['my-feature-branch', 'staging']);
+
+// ✓ Good: QA with fallback
+$qa_client = new PhlagClient($url, $key, ['qa', 'production']);
+
+// ✗ Bad: Production with fallback (defeats the purpose of explicit config)
+$prod_client = new PhlagClient($url, $key, ['production', 'staging']); // Don't do this!
+
+// ✓ Good: Production with single environment
+$prod_client = new PhlagClient($url, $key, 'production');
+```
+
+**Fallback Rules:**
+
+- **Only `null` triggers fallback** - Values like `false`, `0`, and `""` are considered "set" and stop the fallback chain
+- **Order matters** - Earlier environments take precedence
+- **Cache-aware** - With caching enabled, all environments are fetched and merged once
+
+**Example scenarios:**
+
+```php
+$client = new PhlagClient($url, $key, ['staging', 'development']);
+
+// Scenario 1: Staging has value
+// staging: 'feature' => true
+// development: 'feature' => false
+$result = $client->getFlag('feature'); // returns true (staging wins)
+
+// Scenario 2: Staging returns null, development has value
+// staging: 'feature' => null (not configured)
+// development: 'feature' => false
+$result = $client->getFlag('feature'); // returns false (from development)
+
+// Scenario 3: Staging returns false (valid value)
+// staging: 'feature' => false
+// development: 'feature' => true
+$result = $client->getFlag('feature'); // returns false (no fallback, false is valid)
+
+// Scenario 4: Neither environment has the flag
+// staging: 'feature' => null
+// development: 'feature' => null
+$result = $client->getFlag('feature'); // returns null
+```
+
+**Performance considerations:**
+
+- **Without caching:** Worst case = N API calls (one per environment if each returns null)
+- **With caching:** 1 API call per environment on first request, then zero API calls until cache expires
+
 ### Checking Feature Flags
 
 The `isEnabled()` method is perfect for boolean feature toggles:
@@ -126,9 +208,9 @@ $message = $client->getFlag('welcome_message'); // "Hello!" or null
 
 Note: SWITCH flags return `false` when inactive, not `null`.
 
-### Working with Multiple Environments
+### Switching Environments
 
-You can switch environments without creating new client instances:
+You can create new client instances for different environments without losing configuration:
 
 ```php
 $prod_client = new PhlagClient(
@@ -140,14 +222,20 @@ $prod_client = new PhlagClient(
 // Create a new client for staging (immutable pattern)
 $staging_client = $prod_client->withEnvironment('staging');
 
-// Original client unchanged
-echo $prod_client->getEnvironment(); // "production"
-echo $staging_client->getEnvironment(); // "staging"
+// Or switch to multiple environments with fallback
+$multi_client = $prod_client->withEnvironment(['staging', 'development']);
 
-// Query both environments
+// Original client unchanged
+$prod_envs = $prod_client->getEnvironment(); // ["production"]
+$staging_envs = $staging_client->getEnvironment(); // ["staging"]
+$multi_envs = $multi_client->getEnvironment(); // ["staging", "development"]
+
+// Query each client
 $prod_enabled = $prod_client->isEnabled('feature_beta');
 $staging_enabled = $staging_client->isEnabled('feature_beta');
 ```
+
+**Heads-up:** `getEnvironment()` always returns an array, even for single environments. This is a **breaking change** from earlier versions that returned a string.
 
 ## Performance & Caching
 
@@ -308,21 +396,21 @@ try {
 
 ### PhlagClient
 
-#### `__construct(string $base_url, string $api_key, string $environment, bool $cache = false, ?string $cache_file = null, int $cache_ttl = 300)`
+#### `__construct(string $base_url, string $api_key, string|array $environment, bool $cache = false, ?string $cache_file = null, int $cache_ttl = 300)`
 
 Creates a new client instance.
 
 **Parameters:**
 - `$base_url` - Base URL of your Phlag server (e.g., `http://localhost:8000`)
 - `$api_key` - 64-character API key from the Phlag admin panel
-- `$environment` - Environment name (e.g., `production`, `staging`, `development`)
+- `$environment` - Single environment name (string) or multiple environments for fallback (array)
 - `$cache` - Enable file-based caching (default: `false`)
 - `$cache_file` - Custom cache file path (default: auto-generated in system temp directory)
 - `$cache_ttl` - Cache time-to-live in seconds (default: `300`)
 
 #### `getFlag(string $name): mixed`
 
-Retrieves a flag value. When caching is enabled, serves from cache after first request.
+Retrieves a flag value. When caching is enabled, serves from cache after first request. When multiple environments are configured, implements fallback logic.
 
 **Parameters:**
 - `$name` - Flag name
@@ -331,10 +419,11 @@ Retrieves a flag value. When caching is enabled, serves from cache after first r
 
 **Throws:**
 - `AuthenticationException` - Invalid API key
-- `InvalidFlagException` - Flag doesn't exist (cache disabled only)
 - `InvalidEnvironmentException` - Environment doesn't exist
 - `NetworkException` - Network communication failed
 - `PhlagException` - Other errors
+
+**Heads-up:** With multi-environment fallback, InvalidFlagException is caught internally to continue the fallback chain.
 
 #### `isEnabled(string $name): bool`
 
@@ -347,18 +436,20 @@ Convenience method for checking SWITCH flags.
 
 **Throws:** Same as `getFlag()`
 
-#### `getEnvironment(): string`
+#### `getEnvironment(): array`
 
-Gets the current environment name.
+Gets the configured environment names.
 
-**Returns:** The environment name
+**Returns:** Array of environment names (even for single environment)
 
-#### `withEnvironment(string $environment): self`
+**Heads-up:** This is a breaking change from previous versions that returned a string for single environments.
 
-Creates a new client for a different environment. Cache settings are preserved but a new cache file is generated.
+#### `withEnvironment(string|array $environment): self`
+
+Creates a new client for different environment(s). Cache settings are preserved but a new cache file is generated.
 
 **Parameters:**
-- `$environment` - New environment name
+- `$environment` - Single environment name or array of environments
 
 **Returns:** New PhlagClient instance (immutable pattern)
 

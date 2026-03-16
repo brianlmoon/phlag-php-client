@@ -207,7 +207,7 @@ class PhlagClientTest extends TestCase {
     }
 
     /**
-     * Tests getEnvironment returns the correct environment
+     * Tests getEnvironment returns the correct environment as array
      */
     public function testGetEnvironment(): void {
         $mock = new MockHandler([]);
@@ -215,7 +215,7 @@ class PhlagClientTest extends TestCase {
         $client = $this->createClientWithMock($mock, 'staging');
         $result = $client->getEnvironment();
 
-        $this->assertSame('staging', $result);
+        $this->assertSame(['staging'], $result);
     }
 
     /**
@@ -228,8 +228,8 @@ class PhlagClientTest extends TestCase {
         $client2 = $client1->withEnvironment('staging');
 
         $this->assertNotSame($client1, $client2);
-        $this->assertSame('production', $client1->getEnvironment());
-        $this->assertSame('staging', $client2->getEnvironment());
+        $this->assertSame(['production'], $client1->getEnvironment());
+        $this->assertSame(['staging'], $client2->getEnvironment());
     }
 
     /**
@@ -264,7 +264,7 @@ class PhlagClientTest extends TestCase {
             'development'
         );
 
-        $this->assertSame('development', $client->getEnvironment());
+        $this->assertSame(['development'], $client->getEnvironment());
 
         $reflection = new ReflectionClass($client);
 
@@ -513,6 +513,6 @@ class PhlagClientTest extends TestCase {
         $new_client = $client->withEnvironment('staging');
 
         $this->assertSame(20, $new_client->getTimeout());
-        $this->assertSame('staging', $new_client->getEnvironment());
+        $this->assertSame(['staging'], $new_client->getEnvironment());
     }
 }

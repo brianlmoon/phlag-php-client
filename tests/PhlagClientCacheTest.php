@@ -1080,4 +1080,235 @@ class PhlagClientCacheTest extends TestCase {
 
         $this->assertTrue($return);
     }
+
+    /**
+     * Tests multi-environment cache fetches all environments
+     */
+    public function testMultiEnvironmentCacheFetchesAll(): void {
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock = new MockHandler([
+            // First environment (production) - fetched first
+            new Response(200, [], json_encode(['flag1' => 'production-value', 'flag2' => 'prod-only'])),
+            // Second environment (staging) - fetched second
+            new Response(200, [], json_encode(['flag1' => 'staging-value'])),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            ['production', 'staging'],
+            true,
+            $temp_file
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // First request loads cache
+        $result1 = $client->getFlag('flag1');
+        $result2 = $client->getFlag('flag2');
+
+        // Should have made 2 API calls (one per environment)
+        $this->assertCount(2, $container);
+
+        // Production value should win for flag1
+        $this->assertSame('production-value', $result1);
+
+        // flag2 only exists in production
+        $this->assertSame('prod-only', $result2);
+
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests multi-environment cache merge priority
+     */
+    public function testMultiEnvironmentCacheMergePriority(): void {
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock = new MockHandler([
+            // First environment (production) - fetched first
+            new Response(200, [], json_encode([
+                'flag1' => 'production-value',
+                'flag4' => 'production-only',
+            ])),
+            // Second environment (staging) - fetched second
+            new Response(200, [], json_encode([
+                'flag1' => 'staging-value',
+                'flag3' => 'staging-only',
+            ])),
+            // Third environment (development) - fetched third
+            new Response(200, [], json_encode([
+                'flag1' => 'dev-value',
+                'flag2' => 'dev-only',
+            ])),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            ['production', 'staging', 'development'],
+            true,
+            $temp_file
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // Load cache
+        $result1 = $client->getFlag('flag1');
+        $result2 = $client->getFlag('flag2');
+        $result3 = $client->getFlag('flag3');
+        $result4 = $client->getFlag('flag4');
+
+        // Should have made 3 API calls (one per environment)
+        $this->assertCount(3, $container);
+
+        // Production value wins (first environment)
+        $this->assertSame('production-value', $result1);
+
+        // Each flag exists only in its environment
+        $this->assertSame('dev-only', $result2);
+        $this->assertSame('staging-only', $result3);
+        $this->assertSame('production-only', $result4);
+
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that cache merge only overrides null values
+     *
+     * When multiple environments are cached, only null values from the
+     * primary environment should be overridden by fallback values. Non-null
+     * values like false, 0, and "" should NOT be overridden.
+     */
+    public function testCacheMergeOnlyOverridesNullValues(): void {
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock = new MockHandler([
+            // Primary environment (first) - has false, 0, "", null
+            new Response(200, [], json_encode([
+                'flag_false' => false,
+                'flag_zero'  => 0,
+                'flag_empty' => '',
+                'flag_null'  => null,
+            ])),
+            // Fallback environment (second) - has different values for all
+            new Response(200, [], json_encode([
+                'flag_false'         => true,
+                'flag_zero'          => 100,
+                'flag_empty'         => 'text',
+                'flag_null'          => 'from-fallback',
+                'flag_only_fallback' => 'value',
+            ])),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            ['primary', 'fallback'],
+            true,
+            $temp_file
+        );
+
+        $reflection     = new ReflectionClass($client);
+        $client_prop    = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // Load cache - will fetch both environments
+        $result_false = $client->getFlag('flag_false');
+        $result_zero  = $client->getFlag('flag_zero');
+        $result_empty = $client->getFlag('flag_empty');
+        $result_null  = $client->getFlag('flag_null');
+        $result_only  = $client->getFlag('flag_only_fallback');
+
+        // Should have made 2 API calls (one per environment)
+        $this->assertCount(2, $container);
+
+        // false should NOT be overridden (primary wins)
+        $this->assertFalse($result_false);
+
+        // 0 should NOT be overridden (primary wins)
+        $this->assertSame(0, $result_zero);
+
+        // Empty string should NOT be overridden (primary wins)
+        $this->assertSame('', $result_empty);
+
+        // null SHOULD be overridden by fallback value
+        $this->assertSame('from-fallback', $result_null);
+
+        // Flag only in fallback should be included
+        $this->assertSame('value', $result_only);
+
+        // Clean up
+        @unlink($temp_file);
+    }
 }
