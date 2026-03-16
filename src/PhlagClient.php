@@ -362,8 +362,10 @@ class PhlagClient {
      * Fetches flags from all configured environments and merges them
      *
      * This method queries the /all-flags endpoint for each environment
-     * and merges the results. The merge happens in reverse order so that
-     * earlier (primary) environments override later (fallback) environments.
+     * and merges the results. Only null values from earlier (primary)
+     * environments are overridden by later (fallback) environments.
+     * Non-null values including false, 0, and empty string take precedence
+     * and are never overridden.
      *
      * @return array The merged flag data
      *
@@ -375,14 +377,19 @@ class PhlagClient {
     protected function fetchAndMergeFlags(): array {
         $return = [];
 
-        // Fetch flags from all environments in reverse order
-        // so earlier environments override later ones
-        $reversed_environments = array_reverse($this->environments);
+        // Iterate through environments in order (primary first)
+        // Only add/update values that are missing or null
+        foreach ($this->environments as $environment) {
+            $endpoint = sprintf('all-flags/%s', $environment);
+            $flags    = $this->client->get($endpoint);
 
-        foreach ($reversed_environments as $environment) {
-            $endpoint     = sprintf('all-flags/%s', $environment);
-            $flags        = $this->client->get($endpoint);
-            $return       = array_merge($return, $flags);
+            // Merge flags, but only set values if key doesn't exist
+            // or existing value is null
+            foreach ($flags as $key => $value) {
+                if (!isset($return[$key]) || $return[$key] === null) {
+                    $return[$key] = $value;
+                }
+            }
         }
 
         return $return;
