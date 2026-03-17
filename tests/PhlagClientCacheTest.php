@@ -3,9 +3,12 @@
 namespace Moonspot\PhlagClient\Tests;
 
 use GuzzleHttp\Client as GuzzleClient;
+use GuzzleHttp\Exception\ClientException;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Moonspot\PhlagClient\Client;
 use Moonspot\PhlagClient\PhlagClient;
@@ -1307,6 +1310,249 @@ class PhlagClientCacheTest extends TestCase {
 
         // Flag only in fallback should be included
         $this->assertSame('value', $result_only);
+
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that stale cache is used when API fetch fails
+     *
+     * When the cache is expired and the API request fails (e.g., network error),
+     * the client should fall back to serving from the stale cache file rather
+     * than throwing an exception. This allows graceful degradation.
+     */
+    public function testStaleCacheFallbackOnNetworkError(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        // Create a stale cache file (expired)
+        $stale_cache = [
+            'feature_a' => true,
+            'feature_b' => 42,
+            'feature_c' => 'from-stale-cache',
+        ];
+        file_put_contents($temp_file, json_encode($stale_cache));
+
+        // Set the file's mtime to be older than TTL (make it stale)
+        // Using TTL of 300 seconds, so touch file to be 400 seconds old
+        touch($temp_file, time() - 400);
+
+        // Mock handler that throws NetworkException when trying to fetch
+        $mock = new MockHandler([
+            new ConnectException(
+                'Connection timeout',
+                new Request('GET', '/all-flags/production')
+            ),
+        ]);
+
+        $client = $this->createClientWithMock($mock, true, $temp_file, 300);
+
+        // Should load stale cache without throwing exception
+        $result_a = $client->getFlag('feature_a');
+        $result_b = $client->getFlag('feature_b');
+        $result_c = $client->getFlag('feature_c');
+
+        // Values should come from stale cache
+        $this->assertTrue($result_a);
+        $this->assertSame(42, $result_b);
+        $this->assertSame('from-stale-cache', $result_c);
+
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that stale cache fallback works for other exception types
+     *
+     * The stale cache fallback should work for any Throwable, not just
+     * NetworkException. This tests with an AuthenticationException.
+     */
+    public function testStaleCacheFallbackOnAuthenticationError(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        // Create a stale cache file
+        $stale_cache = [
+            'cached_feature' => 'stale-value',
+        ];
+        file_put_contents($temp_file, json_encode($stale_cache));
+        touch($temp_file, time() - 400); // Make it stale
+
+        // Mock handler that throws 401 (authentication error)
+        $mock = new MockHandler([
+            new ClientException(
+                'Unauthorized',
+                new Request('GET', '/all-flags/production'),
+                new Response(401, [], 'Unauthorized')
+            ),
+        ]);
+
+        $client = $this->createClientWithMock($mock, true, $temp_file, 300);
+
+        // Should load stale cache instead of throwing AuthenticationException
+        $result = $client->getFlag('cached_feature');
+
+        $this->assertSame('stale-value', $result);
+
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that exception is thrown when stale cache doesn't exist
+     *
+     * If the cache file is expired/missing and the API fetch fails, and there's
+     * no stale cache to fall back to, the original exception should be thrown.
+     */
+    public function testExceptionThrownWhenNoStaleCacheExists(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        // Don't create a cache file at all
+
+        // Mock handler that throws NetworkException
+        $mock = new MockHandler([
+            new ConnectException(
+                'Connection timeout',
+                new Request('GET', '/all-flags/production')
+            ),
+        ]);
+
+        $client = $this->createClientWithMock($mock, true, $temp_file, 300);
+
+        // Should throw NetworkException since no stale cache exists
+        $this->expectException(\Moonspot\PhlagClient\Exception\NetworkException::class);
+
+        $client->getFlag('feature');
+
+        // Clean up (shouldn't be needed but just in case)
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that exception is thrown when stale cache is empty
+     *
+     * If the stale cache file exists but is empty (or invalid JSON that results
+     * in empty array), the original exception should be thrown rather than
+     * silently returning null for all flags.
+     */
+    public function testExceptionThrownWhenStaleCacheIsEmpty(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        // Create an empty cache file
+        file_put_contents($temp_file, json_encode([]));
+        touch($temp_file, time() - 400); // Make it stale
+
+        // Mock handler that throws NetworkException
+        $mock = new MockHandler([
+            new ConnectException(
+                'Connection timeout',
+                new Request('GET', '/all-flags/production')
+            ),
+        ]);
+
+        $client = $this->createClientWithMock($mock, true, $temp_file, 300);
+
+        // Should throw NetworkException since stale cache is empty
+        $this->expectException(\Moonspot\PhlagClient\Exception\NetworkException::class);
+
+        $client->getFlag('feature');
+
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that exception is thrown when stale cache has invalid JSON
+     *
+     * If the stale cache file exists but contains invalid JSON that can't
+     * be decoded, the original exception should be thrown.
+     */
+    public function testExceptionThrownWhenStaleCacheIsInvalidJson(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        // Create a cache file with invalid JSON
+        file_put_contents($temp_file, 'not valid json {{{');
+        touch($temp_file, time() - 400); // Make it stale
+
+        // Mock handler that throws NetworkException
+        $mock = new MockHandler([
+            new ConnectException(
+                'Connection timeout',
+                new Request('GET', '/all-flags/production')
+            ),
+        ]);
+
+        $client = $this->createClientWithMock($mock, true, $temp_file, 300);
+
+        // Should throw NetworkException since stale cache can't be loaded
+        $this->expectException(\Moonspot\PhlagClient\Exception\NetworkException::class);
+
+        $client->getFlag('feature');
+
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests stale cache fallback with multi-environment configuration
+     *
+     * When multiple environments are configured and the API fetch fails,
+     * the stale cache should still be loaded and used.
+     */
+    public function testStaleCacheFallbackWithMultiEnvironment(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        // Create a stale cache file with merged environment data
+        $stale_cache = [
+            'feature_primary'  => 'from-primary',
+            'feature_fallback' => 'from-fallback',
+        ];
+        file_put_contents($temp_file, json_encode($stale_cache));
+        touch($temp_file, time() - 400); // Make it stale
+
+        // Mock handler that throws on all-flags requests
+        $mock = new MockHandler([
+            new ConnectException(
+                'Connection timeout',
+                new Request('GET', '/all-flags/primary')
+            ),
+        ]);
+
+        $handlerStack = HandlerStack::create($mock);
+        $guzzle       = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $client = new PhlagClient(
+            'http://localhost:8000',
+            'test-key',
+            ['primary', 'fallback'],
+            true,
+            $temp_file,
+            300
+        );
+
+        // Inject the mocked Guzzle client
+        $reflection      = new ReflectionClass($client);
+        $client_prop     = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        // Should load stale cache without throwing
+        $result_primary  = $client->getFlag('feature_primary');
+        $result_fallback = $client->getFlag('feature_fallback');
+
+        $this->assertSame('from-primary', $result_primary);
+        $this->assertSame('from-fallback', $result_fallback);
 
         // Clean up
         @unlink($temp_file);

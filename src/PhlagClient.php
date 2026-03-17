@@ -336,25 +336,61 @@ class PhlagClient {
                 // one process could be warming the cache at the same time that another process is trying to load the
                 // cache causing the file_get_contents function to fail even though the earlier file_exists passed.
                 if (file_exists($this->cache_file)) {
-                    $contents = file_get_contents($this->cache_file);
-
-                    if ($contents !== false) {
-                        $data = json_decode($contents, true);
-
-                        if (json_last_error() === JSON_ERROR_NONE && is_array($data)) {
-                            $this->flag_cache = $data;
-                        }
-                    }
+                    $this->loadCacheFile();
                 }
             }
         }
 
         if (empty($this->flag_cache)) {
-            // Cache miss or expired - fetch from API and merge
-            $this->flag_cache = $this->fetchAndMergeFlags();
+            try {
+                // Cache miss or expired - fetch from API and merge
+                $this->flag_cache = $this->fetchAndMergeFlags();
 
-            // Write to cache file using atomic write
-            $this->writeCacheFile();
+                // Write to cache file using atomic write
+                $this->writeCacheFile();
+            } catch (\Throwable $e) {
+                // If the cache file exists, attempt to load the stale cache
+                if (file_exists($this->cache_file)) {
+                    $this->loadCacheFile();
+
+                    // If loading the stale cache failed to populate a usable cache,
+                    // rethrow the original exception so the error is not silently swallowed.
+                    if (!is_array($this->flag_cache) || empty($this->flag_cache)) {
+                        throw $e;
+                    }
+                } else {
+                    throw $e;
+                }
+            }
+        }
+    }
+
+    /**
+     * Loads flag data from the cache file into memory
+     *
+     * This method reads the JSON-encoded cache file and populates the
+     * in-memory flag_cache. It is used both when a valid (unexpired)
+     * cache file exists and when loading a potentially stale cache as a
+     * fallback after API failures. The method performs JSON decoding with
+     * error checking to ensure data integrity.
+     *
+     * Heads-up: This method silently returns without populating cache if
+     * the file read fails, JSON is invalid, or data isn't an array. In the
+     * normal path, the calling code (loadCache) will then fetch fresh data
+     * from the API. In the API-failure fallback path, there may be no
+     * subsequent API fetch and the cache may remain empty or unchanged.
+     *
+     * @return void
+     */
+    protected function loadCacheFile(): void {
+        $contents = file_get_contents($this->cache_file);
+
+        if ($contents !== false) {
+            $data = json_decode($contents, true);
+
+            if (json_last_error() === JSON_ERROR_NONE && is_array($data)) {
+                $this->flag_cache = $data;
+            }
         }
     }
 
