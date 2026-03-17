@@ -349,9 +349,15 @@ class PhlagClient {
                 // Write to cache file using atomic write
                 $this->writeCacheFile();
             } catch(\Throwable $e) {
-                // If the cache file exists, load the stale cache
+                // If the cache file exists, attempt to load the stale cache
                 if (file_exists($this->cache_file)) {
                     $this->loadCacheFile();
+
+                    // If loading the stale cache failed to populate a usable cache,
+                    // rethrow the original exception so the error is not silently swallowed.
+                    if (!is_array($this->flag_cache) || empty($this->flag_cache)) {
+                        throw $e;
+                    }
                 } else {
                     throw $e;
                 }
