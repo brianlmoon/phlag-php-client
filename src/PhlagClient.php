@@ -348,7 +348,7 @@ class PhlagClient {
 
                 // Write to cache file using atomic write
                 $this->writeCacheFile();
-            } catch(\Throwable $e) {
+            } catch (\Throwable $e) {
                 // If the cache file exists, attempt to load the stale cache
                 if (file_exists($this->cache_file)) {
                     $this->loadCacheFile();
