@@ -369,13 +369,16 @@ class PhlagClient {
      * Loads flag data from the cache file into memory
      *
      * This method reads the JSON-encoded cache file and populates the
-     * in-memory flag_cache. It's called when a valid cache file exists
-     * and hasn't expired. The method performs JSON decoding with error
-     * checking to ensure data integrity.
+     * in-memory flag_cache. It is used both when a valid (unexpired)
+     * cache file exists and when loading a potentially stale cache as a
+     * fallback after API failures. The method performs JSON decoding with
+     * error checking to ensure data integrity.
      *
      * Heads-up: This method silently returns without populating cache if
-     * the file read fails, JSON is invalid, or data isn't an array. The
-     * calling code (loadCache) will handle this by fetching from the API.
+     * the file read fails, JSON is invalid, or data isn't an array. In the
+     * normal path, the calling code (loadCache) will then fetch fresh data
+     * from the API. In the API-failure fallback path, there may be no
+     * subsequent API fetch and the cache may remain empty or unchanged.
      *
      * @return void
      */
