@@ -16,7 +16,7 @@
     },
     "require": {
         "php": "^8.2",
-        "guzzlehttp/guzzle": "^7.10"
+        "guzzlehttp/guzzle": "^7.12"
     },
     "require-dev": {
         "php-parallel-lint/php-parallel-lint": "^1.4",
