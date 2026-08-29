@@ -154,10 +154,18 @@ class PhlagClient {
      * - INTEGER flags return int or null
      * - FLOAT flags return float or null
      * - STRING flags return string or null
+     * - JSON flags return array or null
      *
      * Flags return null when they don't exist, aren't configured for any
      * environment, or are outside their temporal constraints (for non-SWITCH
      * types). SWITCH flags return false when inactive.
+     *
+     * Heads-up: JSON flags always decode to a PHP array, never `stdClass`,
+     * regardless of whether the underlying JSON value was an object (`{...}`)
+     * or a list (`[...]`). We decode with `json_decode(..., true)`, so a
+     * JSON object flag comes back as an associative array and a JSON array
+     * flag comes back as an indexed array. If you need to tell the two
+     * apart, check `array_is_list()` on the result.
      *
      * When caching is enabled, this method serves values from the in-memory
      * cache (populated on first request). When caching is disabled, each call
@@ -165,7 +173,7 @@ class PhlagClient {
      *
      * @param string $name The flag name
      *
-     * @return mixed The flag value (bool, int, float, string, or null)
+     * @return mixed The flag value (bool, int, float, string, array, or null)
      *
      * @throws Exception\AuthenticationException      When the API key is invalid
      * @throws Exception\InvalidEnvironmentException  When the environment doesn't exist

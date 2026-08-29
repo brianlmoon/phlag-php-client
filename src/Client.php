@@ -81,6 +81,12 @@ class Client {
      * base_uri resolution follows RFC 3986, where absolute paths (starting
      * with /) replace the base URI path entirely.
      *
+     * Heads-up: We always decode with `json_decode($body, true)`, so JSON
+     * object values (`{...}`) come back as associative arrays, never
+     * `stdClass`. JSON array values (`[...]`) come back as indexed arrays.
+     * This applies to JSON-type flags returned from the `/flag` endpoint as
+     * well as the flag maps returned from `/all-flags`.
+     *
      * @param string $endpoint The API endpoint path (e.g., flag/production/feature_name)
      *
      * @return mixed The decoded JSON response

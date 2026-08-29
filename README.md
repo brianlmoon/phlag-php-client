@@ -6,7 +6,7 @@ This library provides a simple, type-safe interface for querying feature flags f
 
 ## Features
 
-- 🎯 **Type-safe flag retrieval** - Get boolean, integer, float, or string values
+- 🎯 **Type-safe flag retrieval** - Get boolean, integer, float, string, or array (JSON) values
 - 🌐 **Environment-aware** - Configure once, query a specific environment
 - 🔄 **Immutable environment switching** - Easy multi-environment queries
 - ⚡ **Simple API** - Clean, fluent interface with convenience methods
@@ -199,7 +199,12 @@ $multiplier = $client->getFlag('price_multiplier'); // 1.5 or null
 
 // STRING flags return string or null
 $message = $client->getFlag('welcome_message'); // "Hello!" or null
+
+// JSON flags return array or null
+$config = $client->getFlag('checkout_config'); // ['retries' => 3, 'timeout' => 30] or null
 ```
+
+**Heads-up:** JSON flags always come back as a PHP **array**, never `stdClass`. This is true whether the underlying JSON value is an object (`{"retries": 3}`) or a list (`[1, 2, 3]`) — both decode to a PHP array (associative for objects, indexed for lists). If your code needs to tell the two apart, use `array_is_list($config)`.
 
 **When flags return `null`:**
 - The flag doesn't exist
@@ -415,7 +420,7 @@ Retrieves a flag value. When caching is enabled, serves from cache after first r
 **Parameters:**
 - `$name` - Flag name
 
-**Returns:** The flag value (bool, int, float, string, or null)
+**Returns:** The flag value (bool, int, float, string, array, or null). JSON-type flags return a PHP array, never `stdClass` — both JSON objects and JSON lists decode to arrays.
 
 **Throws:**
 - `AuthenticationException` - Invalid API key
