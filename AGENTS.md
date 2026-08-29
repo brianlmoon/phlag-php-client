@@ -560,6 +560,24 @@ $result = $client->getFlag('feature'); // returns 0 (NO fallback, 0 is valid)
 - Single environment: 1 API call on first request
 - Multiple environments: N API calls on first request (one per environment), then merged
 
+### 9. JSON Flags Return `array`, Never `stdClass`
+
+`Client::get()` decodes every response with `json_decode($body, true)`. That `true` (assoc mode) applies to JSON-type flag values too, so:
+
+```php
+// Phlag flag is a JSON object: {"retries": 3, "timeout": 30}
+$config = $client->getFlag('checkout_config');
+// $config is ['retries' => 3, 'timeout' => 30] — an array, NOT stdClass
+
+// Phlag flag is a JSON list: [1, 2, 3]
+$ids = $client->getFlag('allowed_ids');
+// $ids is [1, 2, 3] — also an array
+```
+
+**Heads-up:** Both JSON objects and JSON lists come back as PHP arrays — there's no `stdClass` anywhere in this library's return types. If your code needs to distinguish "was this a JSON object or a JSON list," use `array_is_list($value)` (`true` for a list, `false` for an object-shaped array). Don't reach for `(object) $value` or assume `->property` access will work on a `getFlag()` result — it won't, it's always an array.
+
+This applies everywhere a flag value flows through: direct `/flag` lookups, the `/all-flags` cache-warming path, and values read back from the on-disk cache file (also decoded with `json_decode(..., true)`).
+
 ---
 
 ## Making Changes
