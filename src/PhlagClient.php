@@ -322,6 +322,10 @@ class PhlagClient {
      * Cache file write failures are logged but don't throw exceptions,
      * allowing graceful degradation to cache-less operation.
      *
+     * Heads-up: an empty flag set is a legitimate result, not a cache miss.
+     * An environment with no configured flags caches as an empty array and is
+     * served from that cache until the TTL expires.
+     *
      * @return void
      *
      * @throws Exception\AuthenticationException      When the API key is invalid
@@ -349,7 +353,11 @@ class PhlagClient {
             }
         }
 
-        if (empty($this->flag_cache)) {
+        // A strict null check, not empty(): loadCacheFile() only assigns on a
+        // successful decode, so null means "nothing was loaded". An empty
+        // array means "loaded fine, this environment has no flags", which is a
+        // real answer worth caching rather than a reason to re-hit the API.
+        if ($this->flag_cache === null) {
             try {
                 // Cache miss or expired - fetch from API and merge
                 $this->flag_cache = $this->fetchAndMergeFlags();
@@ -363,7 +371,9 @@ class PhlagClient {
 
                     // If loading the stale cache failed to populate a usable cache,
                     // rethrow the original exception so the error is not silently swallowed.
-                    if (!is_array($this->flag_cache) || empty($this->flag_cache)) {
+                    // An empty array counts as usable here - it's what the server last
+                    // told us - so only an unreadable or undecodable file rethrows.
+                    if ($this->flag_cache === null) {
                         throw $e;
                     }
                 } else {
@@ -411,12 +421,17 @@ class PhlagClient {
      * Non-null values including false, 0, and empty string take precedence
      * and are never overridden.
      *
+     * Heads-up: this method either returns a complete merged set or throws.
+     * It never returns a partial or empty set because a request failed, which
+     * is what keeps loadCache() from writing an empty cache file over good
+     * data when the server misbehaves.
+     *
      * @return array The merged flag data
      *
      * @throws Exception\AuthenticationException      When the API key is invalid
      * @throws Exception\InvalidEnvironmentException  When an environment doesn't exist
      * @throws Exception\NetworkException             When network communication fails
-     * @throws Exception\PhlagException               For other API errors
+     * @throws Exception\PhlagException               For other API errors, and when a response isn't a flag map
      */
     protected function fetchAndMergeFlags(): array {
         $return = [];
@@ -426,6 +441,16 @@ class PhlagClient {
         foreach ($this->environments as $environment) {
             $endpoint = sprintf('all-flags/%s', $environment);
             $flags    = $this->client->get($endpoint);
+
+            // A valid JSON scalar (true, "x", 42) decodes without error but
+            // isn't a flag map. Iterating it would quietly yield an empty set
+            // and overwrite a good cache file, so refuse the response instead.
+            if (!is_array($flags)) {
+                throw new Exception\PhlagException(
+                    'Unexpected response for: ' . $endpoint,
+                    8
+                );
+            }
 
             // Merge flags, but only set values if key doesn't exist
             // or existing value is null
