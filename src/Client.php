@@ -95,7 +95,7 @@ class Client {
      * @throws InvalidFlagException         When a flag doesn't exist (404 on /flag endpoint)
      * @throws InvalidEnvironmentException  When an environment doesn't exist (404 on environment endpoints)
      * @throws NetworkException             When network communication fails
-     * @throws PhlagException               For other HTTP errors
+     * @throws PhlagException               For other HTTP errors, and when a 200 response body isn't valid JSON
      */
     public function get(string $endpoint): mixed {
         $return = null;
@@ -105,10 +105,19 @@ class Client {
             $body     = $response->getBody()->getContents();
             $return   = json_decode($body, true);
 
-            // Handle scalar responses (from /flag endpoint)
+            // A 200 whose body isn't JSON is a server fault (empty body,
+            // truncated transfer, an HTML error page from a proxy). Returning
+            // null here would let callers read a broken server as "flag not
+            // set", and would let the cache warm itself with an empty flag
+            // set, so we surface it instead.
+            //
+            // Heads-up: the literal body "null" decodes cleanly and is a
+            // legitimate "no value" answer - only a decode *error* throws.
             if (json_last_error() !== JSON_ERROR_NONE) {
-                // Try decoding without associative flag for scalar values
-                $return = json_decode($body);
+                throw new PhlagException(
+                    'Invalid JSON response from: ' . $endpoint,
+                    7
+                );
             }
         } catch (ClientException $e) {
             $status_code = $e->getResponse()->getStatusCode();

@@ -281,4 +281,94 @@ class ClientTest extends TestCase {
         $this->assertTrue($request->hasHeader('Authorization'));
         $this->assertSame(['Bearer my-test-key'], $request->getHeader('Authorization'));
     }
+
+    /**
+     * Tests that an empty response body raises a PhlagException
+     *
+     * A 200 response with an empty body is a server fault, not a valid
+     * "no value" answer. Returning null here would let callers treat a
+     * broken server as "flag not set", so we surface it as an exception.
+     */
+    public function testGetEmptyBodyThrowsException(): void {
+        $mock = new MockHandler([
+            new Response(200, [], ''),
+        ]);
+
+        $client = $this->createClientWithMock($mock);
+
+        $this->expectException(PhlagException::class);
+        $this->expectExceptionMessage('Invalid JSON response');
+
+        $client->get('flag/production/feature');
+    }
+
+    /**
+     * Tests that a non-JSON response body raises a PhlagException
+     *
+     * Proxies and load balancers sometimes return an HTML error page with a
+     * 200 status. That must not be mistaken for a valid flag value.
+     */
+    public function testGetNonJsonBodyThrowsException(): void {
+        $mock = new MockHandler([
+            new Response(200, [], '<html><body>Gateway problem</body></html>'),
+        ]);
+
+        $client = $this->createClientWithMock($mock);
+
+        $this->expectException(PhlagException::class);
+        $this->expectExceptionMessage('Invalid JSON response');
+
+        $client->get('all-flags/production');
+    }
+
+    /**
+     * Tests that truncated JSON raises a PhlagException
+     *
+     * A partial response (connection cut mid-transfer) decodes to null with a
+     * syntax error. We treat that as a failure rather than "no flags".
+     */
+    public function testGetTruncatedJsonThrowsException(): void {
+        $mock = new MockHandler([
+            new Response(200, [], '{"flag1": true, "flag2":'),
+        ]);
+
+        $client = $this->createClientWithMock($mock);
+
+        $this->expectException(PhlagException::class);
+
+        $client->get('all-flags/production');
+    }
+
+    /**
+     * Tests that a literal null body is still a valid response
+     *
+     * Guards the decode-failure check against over-reaching: the body "null"
+     * decodes cleanly and legitimately means "flag not set", so it must keep
+     * returning null instead of throwing.
+     */
+    public function testGetLiteralNullBodyDoesNotThrow(): void {
+        $mock = new MockHandler([
+            new Response(200, [], 'null'),
+        ]);
+
+        $client = $this->createClientWithMock($mock);
+
+        $this->assertNull($client->get('flag/production/nonexistent'));
+    }
+
+    /**
+     * Tests that an empty JSON object is a valid response
+     *
+     * An environment with no configured flags returns {}. That is a real
+     * answer, not a decode failure, so it must come back as an empty array.
+     */
+    public function testGetEmptyObjectDoesNotThrow(): void {
+        $mock = new MockHandler([
+            new Response(200, [], '{}'),
+        ]);
+
+        $client = $this->createClientWithMock($mock);
+
+        $this->assertSame([], $client->get('all-flags/production'));
+    }
 }

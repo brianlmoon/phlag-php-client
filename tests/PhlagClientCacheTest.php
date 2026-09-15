@@ -11,6 +11,7 @@ use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Moonspot\PhlagClient\Client;
+use Moonspot\PhlagClient\Exception\PhlagException;
 use Moonspot\PhlagClient\PhlagClient;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -1428,16 +1429,17 @@ class PhlagClientCacheTest extends TestCase {
     }
 
     /**
-     * Tests that exception is thrown when stale cache is empty
+     * Tests that a stale cache holding an empty flag set is served
      *
-     * If the stale cache file exists but is empty (or invalid JSON that results
-     * in empty array), the original exception should be thrown rather than
-     * silently returning null for all flags.
+     * An empty flag set is a real answer from the server - it means the
+     * environment has no configured flags - so it counts as a usable stale
+     * cache. Only a file we couldn't read or decode leaves us with nothing
+     * and rethrows the original error.
      */
-    public function testExceptionThrownWhenStaleCacheIsEmpty(): void {
+    public function testStaleEmptyCacheIsServed(): void {
         $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
 
-        // Create an empty cache file
+        // Create an empty (but valid) cache file
         file_put_contents($temp_file, json_encode([]));
         touch($temp_file, time() - 400); // Make it stale
 
@@ -1451,10 +1453,85 @@ class PhlagClientCacheTest extends TestCase {
 
         $client = $this->createClientWithMock($mock, true, $temp_file, 300);
 
-        // Should throw NetworkException since stale cache is empty
-        $this->expectException(\Moonspot\PhlagClient\Exception\NetworkException::class);
+        // Serves the empty set instead of throwing
+        $this->assertNull($client->getFlag('feature'));
 
-        $client->getFlag('feature');
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that an environment with no flags is cached, not refetched
+     *
+     * Before this was fixed, an empty result was indistinguishable from a cache
+     * miss, so a valid, fresh cache file holding an empty set was ignored and
+     * the API was hit again on every TTL window. A fresh empty cache file must
+     * be served with zero API calls.
+     */
+    public function testEmptyFlagSetIsServedFromFreshCacheFile(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        // A valid, fresh cache file for an environment with no flags
+        file_put_contents($temp_file, json_encode([]));
+
+        $container = [];
+        $history   = Middleware::history($container);
+
+        $mock         = new MockHandler([]);
+        $handlerStack = HandlerStack::create($mock);
+        $handlerStack->push($history);
+
+        $guzzle = new GuzzleClient([
+            'base_uri' => 'http://localhost:8000/',
+            'handler'  => $handlerStack,
+            'headers'  => [
+                'Authorization' => 'Bearer test-key',
+                'Accept'        => 'application/json',
+            ],
+        ]);
+
+        $client = new PhlagClient('http://localhost:8000', 'test-key', 'production', true, $temp_file, 300);
+
+        $reflection      = new ReflectionClass($client);
+        $client_prop     = $reflection->getProperty('client');
+        $client_prop->setAccessible(true);
+        $internal_client = $client_prop->getValue($client);
+
+        $client_reflection = new ReflectionClass($internal_client);
+        $http_prop         = $client_reflection->getProperty('http_client');
+        $http_prop->setAccessible(true);
+        $http_prop->setValue($internal_client, $guzzle);
+
+        $this->assertNull($client->getFlag('feature'));
+        $this->assertNull($client->getFlag('other_feature'));
+
+        // The fresh cache file answered both lookups - no API traffic at all
+        $this->assertCount(0, $container);
+
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that an empty all-flags response is cached to disk
+     *
+     * The fetch path must persist an empty result the same as any other, so
+     * later requests (and other processes) can serve it from the file.
+     */
+    public function testEmptyAllFlagsResponseIsWrittenToCache(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $mock = new MockHandler([
+            new Response(200, [], '{}'),
+        ]);
+
+        $client = $this->createClientWithMock($mock, true, $temp_file, 300);
+
+        $this->assertNull($client->getFlag('feature'));
+
+        // The empty set was persisted rather than discarded
+        $this->assertFileExists($temp_file);
+        $this->assertSame([], json_decode(file_get_contents($temp_file), true));
 
         // Clean up
         @unlink($temp_file);
@@ -1553,6 +1630,135 @@ class PhlagClientCacheTest extends TestCase {
 
         $this->assertSame('from-primary', $result_primary);
         $this->assertSame('from-fallback', $result_fallback);
+
+        // Clean up
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that a garbage 200 response does not clobber a good cache file
+     *
+     * Before this was fixed, a 200 with an unparseable body decoded to null,
+     * the merge loop warned and produced an empty array, and that empty array
+     * was written over a perfectly good cache file for every process sharing
+     * it. The fetch must fail loudly so the stale-cache fallback takes over
+     * and the file on disk is left intact.
+     */
+    public function testGarbageResponseDoesNotOverwriteCacheFile(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $good_cache = [
+            'feature_a' => true,
+            'feature_b' => 'keep-me',
+        ];
+        file_put_contents($temp_file, json_encode($good_cache));
+        touch($temp_file, time() - 400); // Expired, forcing an API fetch
+
+        $mock = new MockHandler([
+            new Response(200, [], '<html>proxy error</html>'),
+        ]);
+
+        $client = $this->createClientWithMock($mock, true, $temp_file, 300);
+
+        // Stale values are served instead of the bogus empty set
+        $this->assertTrue($client->getFlag('feature_a'));
+        $this->assertSame('keep-me', $client->getFlag('feature_b'));
+
+        // And the cache file itself still holds the good data
+        $on_disk = json_decode(file_get_contents($temp_file), true);
+        $this->assertSame($good_cache, $on_disk);
+
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that a scalar all-flags response does not clobber a good cache file
+     *
+     * A body like "true" decodes without error but is not a flag map. Iterating
+     * it would yield an empty set and wipe the cache, so the fetch must fail.
+     */
+    public function testScalarAllFlagsResponseDoesNotOverwriteCacheFile(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $good_cache = ['feature_a' => 'keep-me'];
+        file_put_contents($temp_file, json_encode($good_cache));
+        touch($temp_file, time() - 400); // Expired, forcing an API fetch
+
+        $mock = new MockHandler([
+            new Response(200, [], 'true'),
+        ]);
+
+        $client = $this->createClientWithMock($mock, true, $temp_file, 300);
+
+        $this->assertSame('keep-me', $client->getFlag('feature_a'));
+
+        $on_disk = json_decode(file_get_contents($temp_file), true);
+        $this->assertSame($good_cache, $on_disk);
+
+        @unlink($temp_file);
+    }
+
+    /**
+     * Tests that a garbage response throws when there is no cache to fall back on
+     *
+     * With no cache file on disk there is nothing to serve, so the underlying
+     * failure must reach the caller rather than silently returning null flags.
+     */
+    public function testGarbageResponseThrowsWithoutStaleCache(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $mock = new MockHandler([
+            new Response(200, [], 'not json at all'),
+        ]);
+
+        $client = $this->createClientWithMock($mock, true, $temp_file, 300);
+
+        $this->expectException(PhlagException::class);
+
+        $client->getFlag('feature_a');
+    }
+
+    /**
+     * Tests that rewriting identical cache contents touches instead of renames
+     *
+     * When a refetch produces byte-identical data, writeCacheFile() skips the
+     * rename and just bumps the existing file's mtime. That avoids a
+     * non-atomic rename on high-latency network filesystems. This verifies the
+     * mtime moves forward and no temp file is left behind.
+     */
+    public function testIdenticalCacheContentsTouchExistingFile(): void {
+        $temp_file = sys_get_temp_dir() . '/phlag_test_' . uniqid() . '.json';
+
+        $flags = json_encode(['feature_a' => true, 'feature_b' => 42]);
+
+        // Same payload twice, so the second write is byte-identical
+        $mock = new MockHandler([
+            new Response(200, [], $flags),
+            new Response(200, [], $flags),
+        ]);
+
+        $client = $this->createClientWithMock($mock, true, $temp_file, 300);
+
+        $client->warmCache();
+        $this->assertFileExists($temp_file);
+
+        // Age the file so the next warm refetches instead of reading the file
+        $stale_time = time() - 400;
+        touch($temp_file, $stale_time);
+        clearstatcache();
+
+        $client->warmCache();
+        clearstatcache();
+
+        // The identical-contents path touched the file rather than replacing it
+        $this->assertGreaterThan($stale_time, filemtime($temp_file));
+        $this->assertSame(
+            ['feature_a' => true, 'feature_b' => 42],
+            json_decode(file_get_contents($temp_file), true)
+        );
+
+        // No temp file was left behind
+        $this->assertSame([], glob($temp_file . '.*.tmp'));
 
         // Clean up
         @unlink($temp_file);
